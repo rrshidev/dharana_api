@@ -189,12 +189,27 @@ async def admin_stats(
 
 @router.get("/stats/series")
 async def admin_stats_series(
+    start: Optional[date] = Query(None, description="Start date YYYY-MM-DD"),
+    end: Optional[date] = Query(None, description="End date YYYY-MM-DD (inclusive)"),
     days: int = Query(30, ge=7, le=90),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Daily series for admin charts: new users, completed practices, new premium subs."""
-    start = date.today() - timedelta(days=days - 1)
+    """Daily series for admin charts: new users, completed practices, new premium subs.
+
+    Accepts either explicit start/end dates (inclusive, calendar filter) or a
+    relative `days` window (backwards compatible).
+    """
+    if start and end:
+        if end < start:
+            start, end = end, start
+        num_days = (end - start).days + 1
+        start_date = start
+    else:
+        start_date = date.today() - timedelta(days=days - 1)
+        num_days = days
+    start_dt = datetime.combine(start_date, datetime.min.time())
+    end_dt = datetime.combine(start_date + timedelta(days=num_days), datetime.min.time())
 
     def _day_key(dt):
         return dt.date().isoformat()
@@ -206,14 +221,18 @@ async def admin_stats_series(
         return counts
 
     users_rows = (await db.execute(
-        select(User.created_at).where(User.created_at >= datetime.combine(start, datetime.min.time()))
+        select(User.created_at).where(
+            User.created_at >= start_dt,
+            User.created_at < end_dt,
+        )
     )).scalars().all()
     users_by_day = _bucket(users_rows)
 
     prac_rows = (await db.execute(
         select(PracticeSession.completed_at).where(
             PracticeSession.status == "completed",
-            PracticeSession.completed_at >= datetime.combine(start, datetime.min.time()),
+            PracticeSession.completed_at >= start_dt,
+            PracticeSession.completed_at < end_dt,
         )
     )).scalars().all()
     prac_by_day = _bucket(prac_rows)
@@ -221,7 +240,8 @@ async def admin_stats_series(
     prem_rows = (await db.execute(
         select(UserSubscription.subscription_start).where(
             UserSubscription.is_premium == True,
-            UserSubscription.subscription_start >= datetime.combine(start, datetime.min.time()),
+            UserSubscription.subscription_start >= start_dt,
+            UserSubscription.subscription_start < end_dt,
         )
     )).scalars().all()
     prem_by_day = _bucket(prem_rows)
@@ -230,8 +250,8 @@ async def admin_stats_series(
     new_users = []
     practices = []
     new_premium = []
-    for i in range(days):
-        day = (start + timedelta(days=i)).isoformat()
+    for i in range(num_days):
+        day = (start_date + timedelta(days=i)).isoformat()
         labels.append(day)
         new_users.append(users_by_day.get(day, 0))
         practices.append(prac_by_day.get(day, 0))
@@ -242,6 +262,170 @@ async def admin_stats_series(
         "new_users": new_users,
         "practices": practices,
         "new_premium": new_premium,
+    }
+
+
+def _resolve_range(start, end, days):
+    """Normalise start/end/days into (start_date, end_date) inclusive."""
+    if start and end:
+        if end < start:
+            start, end = end, start
+        return start, end
+    default_days = days or 30
+    end = date.today()
+    start = end - timedelta(days=default_days - 1)
+    return start, end
+
+
+@router.get("/payments/series")
+async def payments_series(
+    start: Optional[date] = Query(None),
+    end: Optional[date] = Query(None),
+    days: int = Query(30, ge=7, le=90),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Payments per day: pending (created) and confirmed/rejected (reviewed)."""
+    s, e = _resolve_range(start, end, days)
+    s_dt = datetime.combine(s, datetime.min.time())
+    e_dt = datetime.combine(e + timedelta(days=1), datetime.min.time())
+    num_days = (e - s).days + 1
+
+    def _bucket_by(rows, key_fn):
+        counts = {}
+        for r in rows:
+            k = key_fn(r)
+            if k:
+                counts[k] = counts.get(k, 0) + 1
+        return counts
+
+    created_rows = (await db.execute(
+        select(Payment.created_at).where(Payment.created_at >= s_dt, Payment.created_at < e_dt)
+    )).scalars().all()
+    created = _bucket_by(created_rows, lambda dt: dt.date().isoformat())
+
+    reviewed_rows = (await db.execute(
+        select(Payment.status, Payment.reviewed_at).where(
+            Payment.reviewed_at >= s_dt, Payment.reviewed_at < e_dt
+        )
+    )).all()
+    confirmed = {}
+    rejected = {}
+    for status, rv in reviewed_rows:
+        if not rv:
+            continue
+        k = rv.date().isoformat()
+        if status == "confirmed":
+            confirmed[k] = confirmed.get(k, 0) + 1
+        elif status == "rejected":
+            rejected[k] = rejected.get(k, 0) + 1
+
+    labels, pending, appr, rej = [], [], [], []
+    for i in range(num_days):
+        day = (s + timedelta(days=i)).isoformat()
+        labels.append(day)
+        pending.append(created.get(day, 0))
+        appr.append(confirmed.get(day, 0))
+        rej.append(rejected.get(day, 0))
+
+    return {"days": labels, "pending": pending, "confirmed": appr, "rejected": rej}
+
+
+@router.get("/users/{user_id}/activity")
+async def user_activity_series(
+    user_id: int,
+    start: Optional[date] = Query(None),
+    end: Optional[date] = Query(None),
+    days: int = Query(30, ge=7, le=90),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Practice volume per day for a single user (minutes)."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="User not found")
+
+    s, e = _resolve_range(start, end, days)
+    s_dt = datetime.combine(s, datetime.min.time())
+    e_dt = datetime.combine(e + timedelta(days=1), datetime.min.time())
+    num_days = (e - s).days + 1
+
+    rows = (await db.execute(
+        select(PracticeSession.completed_at, PracticeSession.total_duration_seconds).where(
+            PracticeSession.user_id == user_id,
+            PracticeSession.status == "completed",
+            PracticeSession.completed_at >= s_dt,
+            PracticeSession.completed_at < e_dt,
+        )
+    )).all()
+
+    minutes = {}
+    sessions = {}
+    for dt, dur in rows:
+        if not dt:
+            continue
+        k = dt.date().isoformat()
+        minutes[k] = minutes.get(k, 0) + ((dur or 0) / 60)
+        sessions[k] = sessions.get(k, 0) + 1
+
+    labels = []
+    minutes_series = []
+    sessions_series = []
+    for i in range(num_days):
+        day = (s + timedelta(days=i)).isoformat()
+        labels.append(day)
+        minutes_series.append(round(minutes.get(day, 0)))
+        sessions_series.append(sessions.get(day, 0))
+
+    return {"days": labels, "minutes": minutes_series, "sessions": sessions_series}
+
+
+@router.get("/broadcast/series")
+async def broadcast_series(
+    start: Optional[date] = Query(None),
+    end: Optional[date] = Query(None),
+    days: int = Query(30, ge=7, le=90),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Broadcasts per day + recipient volume trend."""
+    s, e = _resolve_range(start, end, days)
+    s_dt = datetime.combine(s, datetime.min.time())
+    e_dt = datetime.combine(e + timedelta(days=1), datetime.min.time())
+    num_days = (e - s).days + 1
+
+    rows = (await db.execute(
+        select(BroadcastMessage.created_at, BroadcastMessage.total_recipients).where(
+            BroadcastMessage.created_at >= s_dt, BroadcastMessage.created_at < e_dt
+        )
+    )).all()
+
+    sent_count = {}
+    recipients = {}
+    total = 0
+    for dt, rcpt in rows:
+        if not dt:
+            continue
+        k = dt.date().isoformat()
+        sent_count[k] = sent_count.get(k, 0) + 1
+        n = rcpt or 0
+        recipients[k] = recipients.get(k, 0) + n
+        total += n
+
+    labels = []
+    campaigns = []
+    recipients_series = []
+    for i in range(num_days):
+        day = (s + timedelta(days=i)).isoformat()
+        labels.append(day)
+        campaigns.append(sent_count.get(day, 0))
+        recipients_series.append(recipients.get(day, 0))
+
+    return {
+        "days": labels,
+        "campaigns": campaigns,
+        "recipients": recipients_series,
+        "total_recipients": total,
     }
 
 
