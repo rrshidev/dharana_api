@@ -187,6 +187,64 @@ async def admin_stats(
     }
 
 
+@router.get("/stats/series")
+async def admin_stats_series(
+    days: int = Query(30, ge=7, le=90),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Daily series for admin charts: new users, completed practices, new premium subs."""
+    start = date.today() - timedelta(days=days - 1)
+
+    def _day_key(dt):
+        return dt.date().isoformat()
+
+    def _bucket(rows):
+        counts = {}
+        for r in rows:
+            counts[_day_key(r)] = counts.get(_day_key(r), 0) + 1
+        return counts
+
+    users_rows = (await db.execute(
+        select(User.created_at).where(User.created_at >= datetime.combine(start, datetime.min.time()))
+    )).scalars().all()
+    users_by_day = _bucket(users_rows)
+
+    prac_rows = (await db.execute(
+        select(PracticeSession.completed_at).where(
+            PracticeSession.status == "completed",
+            PracticeSession.completed_at >= datetime.combine(start, datetime.min.time()),
+        )
+    )).scalars().all()
+    prac_by_day = _bucket(prac_rows)
+
+    prem_rows = (await db.execute(
+        select(UserSubscription.subscription_start).where(
+            UserSubscription.is_premium == True,
+            UserSubscription.subscription_start >= datetime.combine(start, datetime.min.time()),
+        )
+    )).scalars().all()
+    prem_by_day = _bucket(prem_rows)
+
+    labels = []
+    new_users = []
+    practices = []
+    new_premium = []
+    for i in range(days):
+        day = (start + timedelta(days=i)).isoformat()
+        labels.append(day)
+        new_users.append(users_by_day.get(day, 0))
+        practices.append(prac_by_day.get(day, 0))
+        new_premium.append(prem_by_day.get(day, 0))
+
+    return {
+        "days": labels,
+        "new_users": new_users,
+        "practices": practices,
+        "new_premium": new_premium,
+    }
+
+
 @router.get("/activity")
 async def admin_activity(
     limit: int = Query(20, ge=1, le=100),
