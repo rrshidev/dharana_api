@@ -1,13 +1,14 @@
 from datetime import datetime, timedelta, date
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.models import User, UserSubscription, PracticeSession, Payment, BroadcastMessage, BroadcastDelivery
+from app.models.models import User, UserSubscription, PracticeSession, Payment, BroadcastMessage, BroadcastDelivery, Video
 from app.services.auth_service import require_user
+from app.services.video_service import video_service, DuplicateSequenceError
 from app.services.notify_service import notify_admin, notify_error
 import os
 import httpx
@@ -766,3 +767,77 @@ async def broadcast_test(
         result["app"] = "queued"
 
     return result
+
+
+@router.get("/sequences")
+async def admin_list_sequences(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """List ready-sequence videos (for the admin panel)."""
+    result = await db.execute(
+        select(Video)
+        .where(Video.video_type == "sequence")
+        .order_by(Video.sequence_name)
+    )
+    videos = result.scalars().all()
+    return {
+        "items": [
+            {
+                "id": v.id,
+                "name": v.sequence_name,
+                "is_premium": v.is_premium,
+                "filename": v.filename,
+                "filepath": v.filepath,
+                "video_url": f"/api/v1/media/videos/{v.filepath}",
+                "created_at": v.created_at.isoformat() if v.created_at else None,
+            }
+            for v in videos
+        ]
+    }
+
+
+@router.post("/sequences/video")
+async def admin_add_sequence_video(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    section: str = Form(...),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add a ready-sequence video (free|premium) from the admin panel."""
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    clean_name = (name or "").strip().title()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="name is required")
+    if section not in ("free", "premium"):
+        raise HTTPException(status_code=400, detail="section must be 'free' or 'premium'")
+
+    try:
+        video = await video_service.add_sequence_video(
+            db,
+            filename=file.filename or f"{clean_name}.mp4",
+            content=content,
+            name=clean_name,
+            section=section,
+        )
+    except DuplicateSequenceError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Комплекс '{e.name}' уже существует в разделе "
+                   f"{'Premium' if section == 'premium' else 'бесплатные'}. "
+                   f"Переименуйте название и попробуйте снова.",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Не удалось сохранить видео: {e}")
+
+    return {
+        "id": video.id,
+        "name": video.sequence_name,
+        "is_premium": video.is_premium,
+        "video_url": f"/api/v1/media/videos/{video.filepath}",
+    }

@@ -10,11 +10,19 @@ from app.models.models import Video
 
 logger = logging.getLogger(__name__)
 
-MEDIA_DIR = "/opt/dharana/media"
+MEDIA_DIR = settings.MEDIA_DIR or "/opt/dharana/media"
 CATALOG_DIR = os.path.join(MEDIA_DIR, "catalog")
 SEQUENCES_FREE_DIR = os.path.join(MEDIA_DIR, "sequences", "free")
 SEQUENCES_PREMIUM_DIR = os.path.join(MEDIA_DIR, "sequences", "premium")
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+
+
+class DuplicateSequenceError(Exception):
+    """Raised when a sequence video with the same name already exists."""
+
+    def __init__(self, name: str):
+        super().__init__(name)
+        self.name = name
 
 
 class VideoService:
@@ -105,6 +113,62 @@ class VideoService:
         if os.path.exists(full_path):
             return full_path
         return None
+
+    async def add_sequence_video(
+        self,
+        db: AsyncSession,
+        *,
+        filename: str,
+        content: bytes,
+        name: str,
+        section: str,
+    ) -> Video:
+        """Save an uploaded sequence video to the shared catalog and DB.
+
+        Note: callers should wrap a duplicate-name exception with a 409.
+        Raises ValueError on duplicate name and OSError on write failure.
+        """
+        if section not in ("free", "premium"):
+            raise ValueError("section must be 'free' or 'premium'")
+
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in VIDEO_EXTENSIONS:
+            raise ValueError(
+                f"Unsupported video format '{ext}'. Allowed: {', '.join(sorted(VIDEO_EXTENSIONS))}"
+            )
+
+        is_premium = section == "premium"
+        target_dir = self.sequences_premium_dir if is_premium else self.sequences_free_dir
+        filepath_rel = f"sequences/{section}/{filename}"
+
+        # Uniqueness: same name (case-insensitive) in the same section is not allowed.
+        existing = await db.execute(
+            select(Video).where(
+                Video.video_type == "sequence",
+                Video.is_premium == is_premium,
+                Video.sequence_name == name,
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise DuplicateSequenceError(name)
+
+        os.makedirs(target_dir, exist_ok=True)
+        target_path = os.path.join(target_dir, filename)
+        with open(target_path, "wb") as f:
+            f.write(content)
+
+        video = Video(
+            filename=filename,
+            filepath=filepath_rel,
+            video_type="sequence",
+            is_premium=is_premium,
+            sequence_name=name,
+        )
+        db.add(video)
+        await db.commit()
+        await db.refresh(video)
+        logger.info(f"Added sequence video '{name}' -> {filepath_rel}")
+        return video
 
     async def get_asana_video(self, asana_name: str, db: AsyncSession) -> Optional[Video]:
         """Get video for a specific asana."""

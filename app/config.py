@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = '["http://localhost:3000","http://localhost:8080"]'
 
     BOT_DATA_DIR: str = "./bot_data"
+    MEDIA_DIR: str = "/opt/dharana/media"
     ADMIN_TELEGRAM_ID: str = ""
     BOT_TOKEN: str = ""
     BOT_ADMIN_KEY: str = ""

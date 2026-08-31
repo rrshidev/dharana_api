@@ -74,7 +74,7 @@ uploads_dir = os.path.join(os.path.dirname(__file__), "..", "uploads")
 os.makedirs(uploads_dir, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 
-MEDIA_DIR = "/opt/dharana/media"
+MEDIA_DIR = settings.MEDIA_DIR
 if os.path.exists(MEDIA_DIR):
     app.mount("/api/v1/media/videos", StaticFiles(directory=MEDIA_DIR), name="media_videos")
 

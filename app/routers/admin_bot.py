@@ -12,7 +12,9 @@ from app.config import settings
 from app.database import get_db
 from app.models.models import (
     User, UserSubscription, PracticeSession, Payment, BroadcastMessage, BroadcastDelivery,
+    Video,
 )
+from app.services.video_service import video_service, DuplicateSequenceError
 from app.services.notify_service import notify_admin
 
 router = APIRouter(prefix="/admin-bot", tags=["admin-bot"])
@@ -633,3 +635,49 @@ async def bot_broadcast_test(
         result["app"] = "queued"
 
     return result
+
+
+@router.post("/sequences/add-video")
+async def bot_add_sequence_video(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    section: str = Form(...),
+    _=Depends(require_bot_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add a ready-sequence video (free|premium) from the bot."""
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    clean_name = (name or "").strip().title()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="name is required")
+    if section not in ("free", "premium"):
+        raise HTTPException(status_code=400, detail="section must be 'free' or 'premium'")
+
+    try:
+        video = await video_service.add_sequence_video(
+            db,
+            filename=file.filename or f"{clean_name}.mp4",
+            content=content,
+            name=clean_name,
+            section=section,
+        )
+    except DuplicateSequenceError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Комплекс '{e.name}' уже существует в разделе "
+                   f"{'Premium' if section == 'premium' else 'бесплатные'}. "
+                   f"Переименуйте название и попробуйте снова.",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Не удалось сохранить видео: {e}")
+
+    return {
+        "id": video.id,
+        "name": video.sequence_name,
+        "is_premium": video.is_premium,
+        "video_url": f"/api/v1/media/videos/{video.filepath}",
+    }
