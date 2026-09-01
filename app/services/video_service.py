@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 from typing import List, Optional
 
@@ -114,6 +115,14 @@ class VideoService:
             return full_path
         return None
 
+    @staticmethod
+    def _safe_filename(name: str, ext: str) -> str:
+        """Build a filesystem-safe filename from the sequence name."""
+        base = re.sub(r"[^\w\-\u0400-\u04FF]+", "_", name, flags=re.UNICODE).strip("_")
+        if not base:
+            base = "video"
+        return base + ext
+
     async def add_sequence_video(
         self,
         db: AsyncSession,
@@ -139,7 +148,12 @@ class VideoService:
 
         is_premium = section == "premium"
         target_dir = self.sequences_premium_dir if is_premium else self.sequences_free_dir
-        filepath_rel = f"sequences/{section}/{filename}"
+
+        # Store the file under a name derived from the sequence name, so the
+        # on-disk filename (and thus the ready-sequences menu / file service)
+        # matches the human-facing sequence name.
+        safe_file = self._safe_filename(name, ext)
+        filepath_rel = f"sequences/{section}/{safe_file}"
 
         # Uniqueness: same name (case-insensitive) in the same section is not allowed.
         existing = await db.execute(
@@ -153,12 +167,12 @@ class VideoService:
             raise DuplicateSequenceError(name)
 
         os.makedirs(target_dir, exist_ok=True)
-        target_path = os.path.join(target_dir, filename)
+        target_path = os.path.join(target_dir, safe_file)
         with open(target_path, "wb") as f:
             f.write(content)
 
         video = Video(
-            filename=filename,
+            filename=safe_file,
             filepath=filepath_rel,
             video_type="sequence",
             is_premium=is_premium,
