@@ -209,5 +209,130 @@ class VideoService:
         result = await db.execute(select(Video))
         return list(result.scalars().all())
 
+    def _absolute_path(self, filepath: str) -> str:
+        """Map a stored filepath (relative to MEDIA_DIR) to the filesystem."""
+        return os.path.join(self.media_dir, filepath)
+
+    async def add_asana_video(
+        self,
+        db: AsyncSession,
+        *,
+        name: str,
+        filename: str,
+        content: bytes,
+    ) -> Video:
+        """Save an asana catalog video. Replaces an existing video for the asana."""
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in VIDEO_EXTENSIONS:
+            raise ValueError(
+                f"Unsupported video format '{ext}'. Allowed: {', '.join(sorted(VIDEO_EXTENSIONS))}"
+            )
+
+        safe_file = self._safe_filename(name, ext)
+        filepath_rel = f"catalog/{safe_file}"
+        target_path = os.path.join(self.catalog_dir, safe_file)
+
+        # Replace any previous video for this asana (file + row).
+        existing = await db.execute(
+            select(Video).where(
+                Video.video_type == "asana",
+                Video.asana_name == name,
+            )
+        )
+        old = existing.scalar_one_or_none()
+        if old is not None:
+            old_path = self._absolute_path(old.filepath)
+            if os.path.exists(old_path):
+                os.remove(old_path)
+            await db.delete(old)
+
+        os.makedirs(self.catalog_dir, exist_ok=True)
+        with open(target_path, "wb") as f:
+            f.write(content)
+
+        video = Video(
+            filename=safe_file,
+            filepath=filepath_rel,
+            video_type="asana",
+            is_premium=False,
+            asana_name=name,
+        )
+        db.add(video)
+        await db.commit()
+        await db.refresh(video)
+        logger.info(f"Added asana video for '{name}' -> {filepath_rel}")
+        return video
+
+    async def update_sequence_video(
+        self,
+        db: AsyncSession,
+        *,
+        video_id: int,
+        name: str,
+        section: str,
+    ) -> Video:
+        """Rename and/or move an existing sequence video between free/premium."""
+        if section not in ("free", "premium"):
+            raise ValueError("section must be 'free' or 'premium'")
+
+        result = await db.execute(
+            select(Video).where(Video.id == video_id, Video.video_type == "sequence")
+        )
+        video = result.scalar_one_or_none()
+        if video is None:
+            raise ValueError("Sequence video not found")
+
+        clean_name = (name or "").strip().title()
+        if not clean_name:
+            raise ValueError("name is required")
+
+        ext = os.path.splitext(video.filename)[1].lower() or ".mp4"
+        is_premium = section == "premium"
+        target_dir = self.sequences_premium_dir if is_premium else self.sequences_free_dir
+        safe_file = self._safe_filename(clean_name, ext)
+        filepath_rel = f"sequences/{section}/{safe_file}"
+
+        # Uniqueness: same name (case-insensitive) in the same section is not allowed.
+        existing = await db.execute(
+            select(Video).where(
+                Video.video_type == "sequence",
+                Video.is_premium == is_premium,
+                Video.sequence_name == clean_name,
+                Video.id != video_id,
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise DuplicateSequenceError(clean_name)
+
+        # Move the physical file if path changed.
+        old_path = self._absolute_path(video.filepath)
+        new_path = os.path.join(target_dir, safe_file)
+        if old_path != new_path and os.path.exists(old_path):
+            os.makedirs(target_dir, exist_ok=True)
+            os.replace(old_path, new_path)
+
+        video.filename = safe_file
+        video.filepath = filepath_rel
+        video.sequence_name = clean_name
+        video.is_premium = is_premium
+        await db.commit()
+        await db.refresh(video)
+        logger.info(f"Updated sequence video #{video.id} -> '{clean_name}' ({section})")
+        return video
+
+    async def delete_video(self, db: AsyncSession, video_id: int) -> bool:
+        """Delete a video row and its file from disk. Returns True if deleted."""
+        result = await db.execute(select(Video).where(Video.id == video_id))
+        video = result.scalar_one_or_none()
+        if video is None:
+            return False
+        abs_path = self._absolute_path(video.filepath)
+        if os.path.exists(abs_path):
+            os.remove(abs_path)
+        await db.delete(video)
+        await db.commit()
+        logger.info(f"Deleted video #{video.id} ({video.filepath})")
+        return True
+
 
 video_service = VideoService()

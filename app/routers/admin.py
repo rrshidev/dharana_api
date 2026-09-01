@@ -9,6 +9,7 @@ from app.database import get_db
 from app.models.models import User, UserSubscription, PracticeSession, Payment, BroadcastMessage, BroadcastDelivery, Video
 from app.services.auth_service import require_user
 from app.services.video_service import video_service, DuplicateSequenceError
+from app.services.asana_service import asana_service
 from app.services.notify_service import notify_admin, notify_error
 import os
 import httpx
@@ -841,3 +842,223 @@ async def admin_add_sequence_video(
         "is_premium": video.is_premium,
         "video_url": f"/api/v1/media/videos/{video.filepath}",
     }
+
+
+@router.get("/asanas")
+async def admin_list_asanas(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """List catalog asanas (filesystem) with their video status."""
+    result = await db.execute(
+        select(Video.video_type, Video.asana_name)
+        .where(Video.video_type == "asana", Video.asana_name.is_not(None))
+    )
+    video_rows = result.all()
+    video_names: set = {row.asana_name for row in video_rows if row.asana_name}
+
+    data = asana_service.get_all_asanas(limit=10000, offset=0)
+    items = []
+    for a in data["items"]:
+        items.append({
+            "name": a["name"],
+            "category_id": a["category_id"],
+            "image_url": a["image_url"],
+            "difficulty": a["difficulty"],
+            "effects": a["effects"],
+            "has_video": a["name"] in video_names,
+        })
+    items.sort(key=lambda x: x["name"].lower())
+    return {"items": items}
+
+
+@router.post("/asanas")
+async def admin_create_asana(
+    name: str = Form(...),
+    category_id: str = Form(...),
+    description: str = Form(""),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new catalog asana on disk."""
+    try:
+        clean_name = asana_service.create_asana(
+            name=name, category_id=category_id, description=description
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Не удалось сохранить асану: {e}")
+
+    detail = asana_service.get_asana_detail(clean_name) or {}
+    return {"ok": True, "asana": detail}
+
+
+@router.put("/asanas/{name}/info")
+async def admin_update_asana_info(
+    name: str,
+    description: str = Form(""),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update an asana's description on disk."""
+    try:
+        asana_service.update_asana_description(name=name, description=description)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    detail = asana_service.get_asana_detail(name) or {}
+    return {"ok": True, "asana": detail}
+
+
+@router.post("/asanas/{name}/photo")
+async def admin_upload_asana_photo(
+    name: str,
+    file: UploadFile = File(...),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload/replace a photo for an existing asana."""
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    ext = os.path.splitext(file.filename or "")[1].lower() or ".jpg"
+    try:
+        sub_path = asana_service.upload_asana_photo(
+            name=name, content=content, ext=ext
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {"ok": True, "image_url": f"/api/v1/media/photos/{sub_path}"}
+
+
+@router.post("/asanas/{name}/video")
+async def admin_upload_asana_video(
+    name: str,
+    file: UploadFile = File(...),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload/replace a video for an existing asana (catalog)."""
+    # Ensure the asana exists in the filesystem catalog.
+    if asana_service.get_asana_detail(name) is None:
+        raise HTTPException(status_code=404, detail=f"Асана '{name}' не найдена")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    try:
+        video = await video_service.add_asana_video(
+            db,
+            name=name,
+            filename=file.filename or f"{name}.mp4",
+            content=content,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Не удалось сохранить видео: {e}")
+
+    return {
+        "ok": True,
+        "id": video.id,
+        "asana_name": video.asana_name,
+        "video_url": f"/api/v1/media/videos/{video.filepath}",
+    }
+
+
+@router.delete("/asanas/{name}")
+async def admin_delete_asana(
+    name: str,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete an asana: description + photo files, and its catalog video if any."""
+    try:
+        category_id = asana_service.delete_asana_files(name=name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if category_id is None:
+        raise HTTPException(status_code=404, detail=f"Асана '{name}' не найдена")
+
+    # Remove video (row + file) if present.
+    result = await db.execute(
+        select(Video).where(
+            Video.video_type == "asana",
+            Video.asana_name == name,
+        )
+    )
+    for video in result.scalars().all():
+        if video.filepath:
+            abs_path = os.path.join(
+                video_service.media_dir, video.filepath
+            )
+            if os.path.exists(abs_path):
+                os.remove(abs_path)
+        await db.delete(video)
+    await db.commit()
+
+    return {"ok": True, "deleted": name}
+
+
+@router.put("/sequences/{video_id}")
+async def admin_update_sequence(
+    video_id: int,
+    name: str = Form(...),
+    section: str = Form(...),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename and/or move a sequence video between free/premium."""
+    try:
+        video = await video_service.update_sequence_video(
+            db, video_id=video_id, name=name, section=section
+        )
+    except DuplicateSequenceError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Комплекс '{e.name}' уже существует в разделе "
+                   f"{'Premium' if section == 'premium' else 'бесплатные'}.",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Не удалось переместить файл: {e}")
+
+    return {
+        "ok": True,
+        "id": video.id,
+        "name": video.sequence_name,
+        "is_premium": video.is_premium,
+        "video_url": f"/api/v1/media/videos/{video.filepath}",
+    }
+
+
+@router.delete("/sequences/{video_id}")
+async def admin_delete_sequence(
+    video_id: int,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a ready-sequence video (file + row)."""
+    deleted = await video_service.delete_video(db, video_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Видео не найдено")
+    return {"ok": True, "deleted": video_id}
+
+
+@router.delete("/videos/{video_id}")
+async def admin_delete_video(
+    video_id: int,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete any video (asana or sequence) — file + row."""
+    deleted = await video_service.delete_video(db, video_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Видео не найдено")
+    return {"ok": True, "deleted": video_id}

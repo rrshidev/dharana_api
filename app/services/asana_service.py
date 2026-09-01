@@ -206,5 +206,89 @@ class AsanaService:
             logger.error(f"Error reading {path}: {e}")
             return ""
 
+    def refresh_catalog_cache(self):
+        """Invalidate cached category listing after filesystem changes."""
+        self._categories_cache = None
+
+    def _find_category(self, asana_name: str) -> Optional[str]:
+        categories = self._get_categories()
+        for cat_key, asana_names in categories.items():
+            if asana_name in asana_names:
+                return cat_key
+        return None
+
+    @staticmethod
+    def validate_asana_name(name: str) -> str:
+        clean = (name or "").strip()
+        if not clean:
+            raise ValueError("Название асаны обязательно")
+        if any(ch in clean for ch in ('/', '\\', ':', '*', '?', '"', '<', '>', '|', '\0')):
+            raise ValueError("Название содержит недопустимые символы")
+        return clean
+
+    def create_asana(self, *, name: str, category_id: str, description: str = "") -> str:
+        """Create a new asana on disk (description .txt). Returns the asana name."""
+        clean_name = self.validate_asana_name(name)
+        if category_id not in CATEGORY_DESCRIPTIONS:
+            raise ValueError(
+                f"Неизвестная категория '{category_id}'. "
+                f"Доступны: {', '.join(CATEGORY_DESCRIPTIONS)}"
+            )
+        cat_dir = os.path.join(self.catalog_dir, category_id)
+        os.makedirs(cat_dir, exist_ok=True)
+        txt_path = os.path.join(cat_dir, f"{clean_name}.txt")
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write((description or "").strip())
+        self.refresh_catalog_cache()
+        logger.info(f"Created asana '{clean_name}' in category '{category_id}'")
+        return clean_name
+
+    def update_asana_description(self, *, name: str, description: str) -> None:
+        """Update (or create) the .txt description for an existing asana."""
+        clean_name = self.validate_asana_name(name)
+        category_id = self._find_category(clean_name)
+        if category_id is None:
+            raise ValueError(f"Асана '{clean_name}' не найдена")
+        txt_path = os.path.join(self.catalog_dir, category_id, f"{clean_name}.txt")
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write((description or "").strip())
+        self.refresh_catalog_cache()
+
+    def upload_asana_photo(self, *, name: str, content: bytes, ext: str) -> str:
+        """Save/replace an asana photo; returns the media sub-path."""
+        clean_name = self.validate_asana_name(name)
+        category_id = self._find_category(clean_name)
+        if category_id is None:
+            raise ValueError(f"Асана '{clean_name}' не найдена")
+        if ext.lower() not in (".jpg", ".jpeg", ".png"):
+            raise ValueError("Формат фото должен быть JPG или PNG")
+        ext = ext.lower()
+        cat_dir = os.path.join(self.catalog_dir, category_id)
+        # Remove the previous photo if it had a different extension.
+        for old_ext in (".jpg", ".jpeg", ".png"):
+            old_path = os.path.join(cat_dir, f"{clean_name}{old_ext}")
+            if old_ext != ext and os.path.exists(old_path):
+                os.remove(old_path)
+        path = os.path.join(cat_dir, f"{clean_name}{ext}")
+        with open(path, "wb") as f:
+            f.write(content)
+        self.refresh_catalog_cache()
+        return f"{category_id}/{clean_name}{ext}"
+
+    def delete_asana_files(self, *, name: str) -> Optional[str]:
+        """Remove photo + description files (not the video). Returns category_id."""
+        clean_name = self.validate_asana_name(name)
+        category_id = self._find_category(clean_name)
+        if category_id is None:
+            return None
+        cat_dir = os.path.join(self.catalog_dir, category_id)
+        for ext in (".jpg", ".jpeg", ".png", ".txt"):
+            path = os.path.join(cat_dir, f"{clean_name}{ext}")
+            if os.path.exists(path):
+                os.remove(path)
+        self.refresh_catalog_cache()
+        logger.info(f"Deleted asana files for '{clean_name}'")
+        return category_id
+
 
 asana_service = AsanaService()
