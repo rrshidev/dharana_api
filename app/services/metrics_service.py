@@ -31,12 +31,13 @@ def _percentile(values: List[float], q: float) -> float:
 def _prom_line(name: str, value: float, labels: dict | None = None) -> str:
     """Строка в Prometheus text format (OpenMetrics)."""
     if labels:
-        label_str = ",".join(
-            f"{k}=\"{v.replace('\\\\', '\\\\\\\\').replace('\\\"', '\\\\\"')}\""
-            for k, v in labels.items()
-        )
-        return f"{name}{{{label_str}}} {value}"
-    return f"{name} {value}"
+        escaped = []
+        for k, v in labels.items():
+            # Prometheus: экранируем \ и " в значении label
+            sv = str(v).replace("\\", "\\\\").replace('"', '\\"')
+            escaped.append('{}="{}"'.format(k, sv))
+        return name + "{" + ",".join(escaped) + "} " + str(value)
+    return "{} {}".format(name, value)
 
 
 class MetricsCollector:
