@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -15,7 +16,23 @@ from app.routers import (
 
 # Пространство имён "broadcast" занято стандартной функцией Python — импортируем модуль отдельно.
 from app.routers import broadcast as broadcast_router
-logging.basicConfig(level=logging.INFO)
+
+
+def _setup_logging() -> None:
+    """Структурированное логирование: struture {level} {name}: {message}, в одну строку."""
+    class _CompactFormatter(logging.Formatter):
+        def format(self, record):
+            # однострочный формат с levelname/logger name, безопасно для JSON-строк
+            return f"{record.levelname} {record.name}: {record.getMessage()}"
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(_CompactFormatter())
+    root = logging.getLogger()
+    root.handlers[:] = [handler]
+    root.setLevel(logging.INFO)
+
+
+_setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -52,6 +69,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from app.services.monitoring import MonitoringMiddleware, exception_handler
+
+# Мониторинг: замер latency, счётчики, request-id, алерт на 5xx.
+app.add_middleware(MonitoringMiddleware)
+app.add_exception_handler(Exception, exception_handler)
 
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(asanas.router, prefix="/api/v1")

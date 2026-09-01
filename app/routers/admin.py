@@ -189,6 +189,61 @@ async def admin_stats(
     }
 
 
+@router.get("/metrics")
+async def admin_metrics(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """DAU/WAU/MAU, latency, error rate, uptime и сводка по эндпоинтам.
+
+    DAU/WAU/MAU считаются по практике (уникальные пользователи с
+    PracticeSession.started_at за скользящие окна 1/7/30 дней).
+    """
+    now = datetime.utcnow()
+
+    def _dau_window(days_int):
+        return now - timedelta(days=days_int)
+
+    # скользящие окна активности (уникальные юзеры по практике)
+    dau = (await db.execute(
+        select(func.count(func.distinct(PracticeSession.user_id))).where(
+            PracticeSession.started_at >= _dau_window(1)
+        )
+    )).scalar()
+    wau = (await db.execute(
+        select(func.count(func.distinct(PracticeSession.user_id))).where(
+            PracticeSession.started_at >= _dau_window(7)
+        )
+    )).scalar()
+    mau = (await db.execute(
+        select(func.count(func.distinct(PracticeSession.user_id))).where(
+            PracticeSession.started_at >= _dau_window(30)
+        )
+    )).scalar()
+
+    # практики сегодня / вчера (для сравнения)
+    today_start = datetime.combine(now.date(), datetime.min.time())
+    sessions_today = (await db.execute(
+        select(func.count(PracticeSession.id)).where(
+            PracticeSession.started_at >= today_start
+        )
+    )).scalar()
+
+    from app.services.metrics_service import metrics_collector
+    snapshot = await metrics_collector.snapshot()
+
+    return {
+        "active_users": {
+            "dau": dau,
+            "wau": wau,
+            "mau": mau,
+            "sessions_today": sessions_today,
+        },
+        "api": snapshot,
+    }
+
+
+
 @router.get("/stats/series")
 async def admin_stats_series(
     start: Optional[date] = Query(None, description="Start date YYYY-MM-DD"),
