@@ -35,4 +35,16 @@ async def init_db():
             ))
         except Exception:
             pass
+        try:
+            await conn.execute(text(
+                "ALTER TABLE app_users ADD COLUMN is_banned BOOLEAN DEFAULT 0"
+            ))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text(
+                "ALTER TABLE app_users ADD COLUMN is_deleted BOOLEAN DEFAULT 0"
+            ))
+        except Exception:
+            pass
         await conn.run_sync(Base.metadata.create_all)

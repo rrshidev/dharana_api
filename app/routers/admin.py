@@ -63,6 +63,8 @@ async def list_users(
             "username": u.username,
             "telegram_id": u.telegram_id,
             "is_premium": sub.is_premium if sub else False,
+            "is_banned": bool(u.is_banned),
+            "is_deleted": bool(u.is_deleted),
             "total_practice_minutes": u.total_practice_minutes,
             "total_practice_days": u.total_practice_days,
             "last_practice_at": u.last_practice_at.isoformat() if u.last_practice_at else None,
@@ -106,6 +108,8 @@ async def get_user_detail(
             "avatar_url": user.avatar_url,
             "bio": user.bio,
             "is_admin": user.is_admin,
+            "is_banned": bool(user.is_banned),
+            "is_deleted": bool(user.is_deleted),
             "total_practice_minutes": user.total_practice_minutes,
             "total_practice_days": user.total_practice_days,
             "current_streak": user.current_streak,
@@ -576,6 +580,129 @@ async def set_user_premium(
         sub.subscription_end = None
         await db.commit()
         return {"user_id": user.id, "is_premium": False, "changed": True}
+
+
+class UserBanBody(BaseModel):
+    banned: bool = True
+
+
+class UserDeleteBody(BaseModel):
+    deleted: bool = True
+
+
+class UserMessageBody(BaseModel):
+    channel: str = "both"  # telegram | app | both
+    message: str
+
+
+async def _get_admin_target_user(db, user_id: int) -> User:
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.is_banned or user.is_deleted:
+        raise HTTPException(status_code=400, detail="User is banned or deleted")
+    return user
+
+
+@router.post("/users/{user_id}/message")
+async def send_user_message(
+    user_id: int,
+    body: UserMessageBody,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Отправить прямoe e-mail/TG/app-сообщение конкретному пользователю."""
+    from app.config import settings
+
+    channel = (body.channel or "both").strip().lower()
+    if channel not in ("telegram", "app", "both"):
+        raise HTTPException(status_code=400, detail="channel must be 'telegram', 'app' or 'both'")
+    message = (body.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    user = await _get_admin_target_user(db, user_id)
+    result = {"telegram": "skipped", "app": "skipped"}
+
+    if channel in ("telegram", "both"):
+        if not user.telegram_id:
+            result["telegram"] = "no_telegram"
+        elif not settings.BOT_TOKEN:
+            result["telegram"] = "no_bot"
+        else:
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage",
+                        json={"chat_id": user.telegram_id, "text": message},
+                        timeout=10,
+                    )
+                result["telegram"] = "sent" if resp.status_code == 200 else "failed"
+            except Exception:
+                result["telegram"] = "failed"
+
+    if channel in ("app", "both"):
+        msg = BroadcastMessage(
+            message=message,
+            audience_free=True,
+            audience_premium=True,
+            channel_telegram=False,
+            channel_app=True,
+            author_id=admin.id,
+            total_recipients=1,
+            app_pending=1,
+        )
+        db.add(msg)
+        await db.flush()
+        db.add(BroadcastDelivery(
+            message_id=msg.id,
+            user_id=user.id,
+            channel="app",
+            status="pending",
+        ))
+        await db.commit()
+        result["app"] = "queued"
+
+    return {"user_id": user.id, **result}
+
+
+@router.post("/users/{user_id}/ban")
+async def set_user_ban(
+    user_id: int,
+    body: UserBanBody,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.is_admin:
+        raise HTTPException(status_code=400, detail="Cannot ban an admin user")
+    if user.is_deleted:
+        raise HTTPException(status_code=400, detail="User is deleted")
+    user.is_banned = bool(body.banned)
+    await db.commit()
+    return {"user_id": user.id, "is_banned": bool(user.is_banned), "changed": True}
+
+
+@router.post("/users/{user_id}/delete")
+async def set_user_deleted(
+    user_id: int,
+    body: UserDeleteBody,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.is_admin:
+        raise HTTPException(status_code=400, detail="Cannot delete an admin user")
+    user.is_deleted = bool(body.deleted)
+    await db.commit()
+    return {"user_id": user.id, "is_deleted": bool(user.is_deleted), "changed": True}
 
 
 @router.get("/payments")
