@@ -141,9 +141,13 @@ async def admin_stats(
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    total_users = (await db.execute(select(func.count(User.id)))).scalar()
+    total_users = (await db.execute(
+        select(func.count(User.id)).where(User.is_deleted == False)
+    )).scalar()
     premium_users = (await db.execute(
-        select(func.count(UserSubscription.id)).where(UserSubscription.is_premium == True)
+        select(func.count(UserSubscription.id))
+        .join(User, User.id == UserSubscription.user_id)
+        .where(UserSubscription.is_premium == True, User.is_deleted == False)
     )).scalar()
 
     total_sessions = (await db.execute(
@@ -155,11 +159,17 @@ async def admin_stats(
     month_ago = today - timedelta(days=30)
 
     new_users_week = (await db.execute(
-        select(func.count(User.id)).where(User.created_at >= datetime.combine(week_ago, datetime.min.time()))
+        select(func.count(User.id)).where(
+            User.is_deleted == False,
+            User.created_at >= datetime.combine(week_ago, datetime.min.time()),
+        )
     )).scalar()
 
     new_users_month = (await db.execute(
-        select(func.count(User.id)).where(User.created_at >= datetime.combine(month_ago, datetime.min.time()))
+        select(func.count(User.id)).where(
+            User.is_deleted == False,
+            User.created_at >= datetime.combine(month_ago, datetime.min.time()),
+        )
     )).scalar()
 
     sessions_week = (await db.execute(
@@ -283,6 +293,7 @@ async def admin_stats_series(
 
     users_rows = (await db.execute(
         select(User.created_at).where(
+            User.is_deleted == False,
             User.created_at >= start_dt,
             User.created_at < end_dt,
         )

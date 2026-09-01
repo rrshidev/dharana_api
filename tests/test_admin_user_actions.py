@@ -190,3 +190,13 @@ async def test_list_and_detail_expose_flags(client):
 
     det = (await client.get(f"/api/v1/admin/users/{uid}")).json()
     assert det["user"]["is_banned"] is True
+
+
+async def test_stats_exclude_soft_deleted(client):
+    await _mk_user()
+    gone = await _mk_user()
+    await client.post(f"/api/v1/admin/users/{gone}/delete", json={"deleted": True})
+
+    stats = (await client.get("/api/v1/admin/stats")).json()
+    # admin (from fixture) + alive user; deleted user excluded
+    assert stats["total_users"] == 2
