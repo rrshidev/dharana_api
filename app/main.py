@@ -91,6 +91,8 @@ app.include_router(admin.router, prefix="/api/v1")
 app.include_router(admin_bot.router, prefix="/api/v1")
 app.include_router(payments.router, prefix="/api/v1")
 app.include_router(broadcast_router.router, prefix="/api/v1")
+from app.routers import metrics as metrics_router
+app.include_router(metrics_router.router, prefix="/api/v1")
 
 import os
 uploads_dir = os.path.join(os.path.dirname(__file__), "..", "uploads")

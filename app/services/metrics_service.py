@@ -20,6 +20,25 @@ class EndpointStats:
     latencies: deque = field(default_factory=lambda: deque(maxlen=2000))
 
 
+def _percentile(values: List[float], q: float) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    idx = min(len(s) - 1, int(len(s) * q))
+    return round(s[idx], 2)
+
+
+def _prom_line(name: str, value: float, labels: dict | None = None) -> str:
+    """Строка в Prometheus text format (OpenMetrics)."""
+    if labels:
+        label_str = ",".join(
+            f"{k}=\"{v.replace('\\\\', '\\\\\\\\').replace('\\\"', '\\\\\"')}\""
+            for k, v in labels.items()
+        )
+        return f"{name}{{{label_str}}} {value}"
+    return f"{name} {value}"
+
+
 class MetricsCollector:
     def __init__(self) -> None:
         self.lock = asyncio.Lock()
@@ -67,13 +86,37 @@ class MetricsCollector:
                 "endpoints": eps,
             }
 
-
-def _percentile(values: List[float], q: float) -> float:
-    if not values:
-        return 0.0
-    s = sorted(values)
-    idx = min(len(s) - 1, int(len(s) * q))
-    return round(s[idx], 2)
+    async def to_prometheus(self) -> str:
+        """Экспорт в Prometheus text format (для VictoriaMetrics scraper)."""
+        async with self.lock:
+            lines = [
+                "# HELP dharana_requests_total Total requests served",
+                "# TYPE dharana_requests_total gauge",
+                _prom_line("dharana_requests_total", self.total_requests),
+                "# HELP dharana_5xx_total Total 5xx responses",
+                "# TYPE dharana_5xx_total gauge",
+                _prom_line("dharana_5xx_total", self.total_5xx),
+                "# HELP dharana_error_rate 5xx request rate (0..1)",
+                "# TYPE dharana_error_rate gauge",
+                _prom_line("dharana_error_rate", round(
+                    self.total_5xx / self.total_requests, 4) if self.total_requests else 0.0),
+                "# HELP dharana_uptime_seconds Process uptime",
+                "# TYPE dharana_uptime_seconds gauge",
+                _prom_line("dharana_uptime_seconds", int(time.time() - self.started_at)),
+            ]
+            for path, s in sorted(self.endpoints.items(), key=lambda e: -e[1].requests):
+                label = {"path": path}
+                lines.append(_prom_line("dharana_requests", s.requests, label))
+                lines.append(_prom_line("dharana_4xx", s.errors_4xx, label))
+                lines.append(_prom_line("dharana_5xx", s.errors_5xx, label))
+                lines.append(_prom_line(
+                    "dharana_latency_avg_ms",
+                    round(s.total_time_ms / s.requests, 2) if s.requests else 0.0,
+                    label,
+                ))
+                lines.append(_prom_line("dharana_latency_p50_ms", _percentile(list(s.latencies), 0.50), label))
+                lines.append(_prom_line("dharana_latency_p95_ms", _percentile(list(s.latencies), 0.95), label))
+            return "\n".join(lines) + "\n"
 
 
 metrics_collector = MetricsCollector()

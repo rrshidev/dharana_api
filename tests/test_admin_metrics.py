@@ -114,3 +114,31 @@ async def test_metrics_dau_and_api_snapshot(client):
     assert ep["errors_5xx"] == 1
     assert ep["requests"] == 2
     assert ep["p50_ms"] > 0
+
+
+async def test_prometheus_metrics_endpoint(client):
+    # seed some data (collector is global and may have state from prior tests)
+    await metrics_collector.record("/api/v1/asanas", 200, 20.0)
+    await metrics_collector.record("/api/v1/asanas", 500, 100.0)
+    await metrics_collector.record("/api/v1/health", 200, 5.0)
+
+    r = await client.get("/api/v1/metrics")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/plain")
+    body = r.text
+
+    # structural checks: metric names present, format valid
+    assert "dharana_requests_total" in body
+    assert "dharana_5xx_total" in body
+    assert "dharana_error_rate " in body
+    assert "dharana_uptime_seconds " in body
+    # per-endpoint lines exist
+    assert "dharana_requests{path=\"/api/v1/asanas\"}" in body
+    assert "dharana_latency_p50_ms{path=\"/api/v1/asanas\"}" in body
+    assert "dharana_latency_p95_ms{path=\"/api/v1/asanas\"}" in body
+    assert "dharana_5xx{path=\"/api/v1/asanas\"}" in body
+    # all lines end with a number
+    for line in body.strip().split("\n"):
+        if line.startswith("#") or not line.strip():
+            continue
+        assert line.split()[-1].replace(".", "").replace("-", "").isdigit(), f"bad line: {line}"
