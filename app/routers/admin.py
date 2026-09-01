@@ -310,8 +310,11 @@ async def admin_stats_series(
     prac_by_day = _bucket(prac_rows)
 
     prem_rows = (await db.execute(
-        select(UserSubscription.subscription_start).where(
+        select(UserSubscription.subscription_start)
+        .join(User, User.id == UserSubscription.user_id)
+        .where(
             UserSubscription.is_premium == True,
+            User.is_deleted == False,
             UserSubscription.subscription_start >= start_dt,
             UserSubscription.subscription_start < end_dt,
         )

@@ -2,6 +2,7 @@
 
 import os
 import uuid
+from datetime import datetime
 
 import httpx
 import pytest
@@ -33,7 +34,7 @@ async def _mk_admin():
         return user.id
 
 
-async def _mk_user(telegram_id=None):
+async def _mk_user(telegram_id=None, premium=False):
     user = User(
         email=f"{_rnd()}@test.ru",
         name="User",
@@ -43,6 +44,13 @@ async def _mk_user(telegram_id=None):
     )
     async with async_session() as db:
         db.add(user)
+        await db.flush()
+        if premium:
+            db.add(UserSubscription(
+                user_id=user.id,
+                is_premium=True,
+                subscription_start=datetime.utcnow(),
+            ))
         await db.commit()
         await db.refresh(user)
         return user.id
@@ -200,3 +208,15 @@ async def test_stats_exclude_soft_deleted(client):
     stats = (await client.get("/api/v1/admin/stats")).json()
     # admin (from fixture) + alive user; deleted user excluded
     assert stats["total_users"] == 2
+
+
+async def test_premium_series_excludes_soft_deleted(client):
+    alive = await _mk_user(premium=True)
+    gone = await _mk_user(premium=True)
+    await client.post(f"/api/v1/admin/users/{gone}/delete", json={"deleted": True})
+
+    stats = (await client.get("/api/v1/admin/stats")).json()
+    assert stats["premium_users"] == 1  # only the alive one
+
+    series = (await client.get("/api/v1/admin/stats/series", params={"days": 30})).json()
+    assert sum(series["new_premium"]) == 1
