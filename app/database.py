@@ -18,33 +18,9 @@ async def get_db() -> AsyncSession:
 
 
 async def init_db():
+    # На PostgreSQL схема управляется Alembic (единая БД с ботом).
+    # Legacy-ALTER'ы и повторный create_all здесь ломали транзакцию на PG.
+    if settings.DATABASE_URL.startswith("postgresql"):
+        return
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    from sqlalchemy import text
-    async with engine.begin() as conn:
-        try:
-            await conn.execute(text(
-                "ALTER TABLE app_practice_sessions ADD COLUMN rest_seconds INTEGER DEFAULT 15"
-            ))
-        except Exception:
-            pass
-        try:
-            await conn.execute(text(
-                "ALTER TABLE app_users ADD COLUMN is_admin BOOLEAN DEFAULT 0"
-            ))
-        except Exception:
-            pass
-        try:
-            await conn.execute(text(
-                "ALTER TABLE app_users ADD COLUMN is_banned BOOLEAN DEFAULT 0"
-            ))
-        except Exception:
-            pass
-        try:
-            await conn.execute(text(
-                "ALTER TABLE app_users ADD COLUMN is_deleted BOOLEAN DEFAULT 0"
-            ))
-        except Exception:
-            pass
         await conn.run_sync(Base.metadata.create_all)
