@@ -201,6 +201,7 @@ class BroadcastMessage(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     message = Column(Text, nullable=False)
+    media_url = Column(String(500), nullable=True)      # вложение (изображение/чек)
     audience_free = Column(Boolean, default=False)      # кому: бесплатные
     audience_premium = Column(Boolean, default=False)   # кому: платные
     channel_telegram = Column(Boolean, default=False)   # куда: телеграм

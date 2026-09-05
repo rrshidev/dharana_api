@@ -35,6 +35,7 @@ async def get_broadcast_notifications(
             "delivery_id": d.id,
             "message_id": m.id,
             "message": m.message,
+            "media_url": m.media_url,
             "created_at": m.created_at.isoformat() if m.created_at else None,
             "is_read": is_read,
         })

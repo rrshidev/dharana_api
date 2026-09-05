@@ -575,6 +575,7 @@ async def bot_broadcast_pending(_=Depends(require_bot_key), db: AsyncSession = D
                 "telegram_id": delivery.telegram_id,
                 "user_id": delivery.user_id,
                 "message": msg.message,
+                "media_url": msg.media_url,
             })
         bm = items[0][1]
         bm.telegram_pending -= len(items)

@@ -12,6 +12,7 @@ from app.services.video_service import video_service, DuplicateSequenceError
 from app.services.asana_service import asana_service
 from app.services.notify_service import notify_admin, notify_error
 import os
+import uuid
 import httpx
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -607,6 +608,65 @@ class UserDeleteBody(BaseModel):
 class UserMessageBody(BaseModel):
     channel: str = "both"  # telegram | app | both
     message: str
+    media_url: Optional[str] = None  # /uploads/messages/... (ссылка на загруженное вложение)
+
+
+MESSAGES_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "uploads", "messages")
+MAX_MEDIA_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+@router.post("/messages/upload")
+async def upload_admin_message_media(
+    file: UploadFile = File(...),
+    admin: User = Depends(require_admin),
+):
+    """Загрузить изображение/чек для сообщения пользователю."""
+    os.makedirs(MESSAGES_UPLOAD_DIR, exist_ok=True)
+    ext = os.path.splitext(file.filename or "attachment.jpg")[1].lower() or ".jpg"
+    filename = f"{uuid.uuid4().hex}{ext}"
+    filepath = os.path.join(MESSAGES_UPLOAD_DIR, filename)
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(content) > MAX_MEDIA_BYTES:
+        raise HTTPException(status_code=400, detail="File too large (max 10 MB)")
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    return {"media_url": f"/uploads/messages/{filename}"}
+
+
+def _local_media_path(media_url: str) -> Optional[str]:
+    """Преобразовать /uploads/... в локальный путь к файлу на диске."""
+    if not media_url or not str(media_url).startswith("/uploads/"):
+        return None
+    rel = str(media_url)[len("/uploads/"):]
+    return os.path.join(os.path.dirname(__file__), "..", "..", "uploads", rel)
+
+
+async def _send_telegram_photo(chat_id, message, media_url):
+    """Отправить фото в Telegram с локального диска (sendPhoto multipart)."""
+    from app.config import settings
+
+    path = _local_media_path(media_url)
+    if not path or not os.path.exists(path):
+        return False
+    ext = os.path.splitext(path)[1].lower()
+    mime = "image/png" if ext == ".png" else "image/jpeg"
+    fname = os.path.basename(path)
+    with open(path, "rb") as f:
+        content = f.read()
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendPhoto",
+            data={
+                "chat_id": chat_id,
+                "caption": message[:1000],
+            },
+            files={"photo": (fname, content, mime)},
+            timeout=15,
+        )
+    return resp.status_code == 200
 
 
 async def _get_admin_target_user(db, user_id: int) -> User:
@@ -646,19 +706,30 @@ async def send_user_message(
             result["telegram"] = "no_bot"
         else:
             try:
-                async with httpx.AsyncClient() as client:
-                    resp = await client.post(
-                        f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage",
-                        json={"chat_id": user.telegram_id, "text": message},
-                        timeout=10,
-                    )
-                result["telegram"] = "sent" if resp.status_code == 200 else "failed"
+                sent = False
+                if body.media_url:
+                    try:
+                        sent = await _send_telegram_photo(
+                            user.telegram_id, message, body.media_url
+                        )
+                    except Exception:
+                        sent = False
+                if not sent:
+                    async with httpx.AsyncClient() as client:
+                        resp = await client.post(
+                            f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage",
+                            json={"chat_id": user.telegram_id, "text": message},
+                            timeout=10,
+                        )
+                    sent = resp.status_code == 200
+                result["telegram"] = "sent" if sent else "failed"
             except Exception:
                 result["telegram"] = "failed"
 
     if channel in ("app", "both"):
         msg = BroadcastMessage(
             message=message,
+            media_url=body.media_url,
             audience_free=True,
             audience_premium=True,
             channel_telegram=False,

@@ -220,3 +220,57 @@ async def test_premium_series_excludes_soft_deleted(client):
 
     series = (await client.get("/api/v1/admin/stats/series", params={"days": 30})).json()
     assert sum(series["new_premium"]) == 1
+
+
+async def test_message_upload_endpoint(client):
+    r = await client.post(
+        "/api/v1/admin/messages/upload",
+        files={"file": ("receipt.jpg", b"\xff\xd8\xff\xe0fakejpg", "image/jpeg")},
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["media_url"].startswith("/uploads/messages/")
+
+
+async def test_message_upload_admin_required(client):
+    uid = await _mk_user()
+    token = create_access_token(uid)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as u:
+        u.headers.update({"Authorization": f"Bearer {token}"})
+        r = await u.post(
+            "/api/v1/admin/messages/upload",
+            files={"file": ("x.jpg", b"123", "image/jpeg")},
+        )
+    assert r.status_code == 403
+
+
+async def test_message_in_app_with_media_stores_media_url(client):
+    uid = await _mk_user()
+    r = await client.post(f"/api/v1/admin/users/{uid}/message", json={
+        "channel": "app",
+        "message": "Hi with media",
+        "media_url": "/uploads/messages/abc.jpg",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["app"] == "queued"
+
+    async with async_session() as db:
+        msgs = (await db.execute(sa_select(BroadcastMessage))).scalars().all()
+        assert len(msgs) == 1
+        assert msgs[0].media_url == "/uploads/messages/abc.jpg"
+
+
+async def test_notifications_return_media_url(client):
+    uid = await _mk_user()
+    await client.post(f"/api/v1/admin/users/{uid}/message", json={
+        "channel": "app",
+        "message": "with media",
+        "media_url": "/uploads/messages/x.png",
+    })
+    token = create_access_token(uid)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as u:
+        u.headers.update({"Authorization": f"Bearer {token}"})
+        r = await u.get("/api/v1/notifications/broadcast")
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert any(i["media_url"] == "/uploads/messages/x.png" for i in items)
