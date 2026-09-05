@@ -245,6 +245,53 @@ async def set_premium(
         return {"user_id": user.id, "is_premium": False, "changed": changed}
 
 
+@router.get("/subscription")
+async def bot_subscription(
+    telegram_id: int | None = Query(default=None),
+    user_id: int | None = Query(default=None),
+    _=Depends(require_bot_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Статус подписки пользователя (для бота) — источник правды по премиуму"""
+    if telegram_id is None and user_id is None:
+        raise HTTPException(status_code=400, detail="Provide telegram_id or user_id")
+
+    user = await _find_user(db, telegram_id, user_id)
+    if user is None:
+        return {
+            "user_id": None,
+            "telegram_id": telegram_id,
+            "is_active": False,
+            "is_trial": False,
+            "subscription_type": None,
+            "subscription_end": None,
+        }
+
+    result = await db.execute(
+        select(UserSubscription).where(UserSubscription.user_id == user.id)
+    )
+    sub = result.scalar_one_or_none()
+
+    now = datetime.utcnow()
+    is_active = False
+    is_trial = False
+    if sub is not None:
+        if sub.is_premium and sub.subscription_end and now < sub.subscription_end:
+            is_active = True
+        if sub.trial_used and sub.trial_end and now < sub.trial_end:
+            is_active = True
+            is_trial = True
+
+    return {
+        "user_id": user.id,
+        "telegram_id": user.telegram_id,
+        "is_active": is_active,
+        "is_trial": is_trial,
+        "subscription_type": sub.subscription_type if sub else None,
+        "subscription_end": sub.subscription_end.isoformat() if sub and sub.subscription_end else None,
+    }
+
+
 @router.get("/payments/requisites")
 async def bot_payment_requisites(_=Depends(require_bot_key)):
     from app.routers.payments import REQUISITES
