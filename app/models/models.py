@@ -18,10 +18,20 @@ class User(Base):
     telegram_id = Column(Integer, unique=True, nullable=True, index=True)
     hashed_password = Column(String(255), nullable=True)
     name = Column(String(255), nullable=True)
+    last_name = Column(String(255), nullable=True)
     username = Column(String(100), unique=True, nullable=True, index=True)
     bio = Column(Text, nullable=True)
     avatar_url = Column(String(500), nullable=True)
 
+    # Настройки "Асаны дня" (используются Telegram-ботом)
+    daily_asana_enabled = Column(Boolean, default=True)
+    daily_asana_time = Column(Time, default=None)
+    timezone = Column(String(50), default="UTC")
+    last_daily_asana_date = Column(Date, default=None)
+
+    # Статистика (боти + приложение)
+    total_practices = Column(Integer, default=0)
+    streak_days = Column(Integer, default=0)
     total_practice_minutes = Column(Integer, default=0)
     total_practice_days = Column(Integer, default=0)
     last_practice_at = Column(DateTime, nullable=True)
@@ -224,3 +234,53 @@ class BroadcastDelivery(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow)
     sent_at = Column(DateTime, nullable=True)
+
+
+class ReadySequence(Base):
+    """Готовые комплексы (контент Telegram-бота, единая БД)."""
+    __tablename__ = "ready_sequences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=False)
+    video_path = Column(String(500))
+    video_url = Column(String(500))
+    thumbnail_path = Column(String(500))
+    duration = Column(Integer, default=30)
+    difficulty_level = Column(Integer, default=1)
+    focus_areas = Column(String(500))
+    category = Column(String(100))
+    instructor_name = Column(String(255), default="Йога инструктор")
+    is_premium = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True)
+    views_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AsanaVideo(Base):
+    """Видео для асан (контент Telegram-бота, единая БД)."""
+    __tablename__ = "asana_videos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    asana_name = Column(String(200), nullable=False, index=True)
+    video_path = Column(String(500), nullable=False)
+    video_url = Column(String(500))
+    thumbnail_path = Column(String(500))
+
+    duration = Column(Integer)
+    file_size = Column(Integer)
+    resolution = Column(String(20))
+    format = Column(String(10))
+
+    description = Column(Text)
+    instructor_name = Column(String(100))
+    difficulty_level = Column(Integer)
+    focus_points = Column(String(500))
+
+    is_premium = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True)
+    views_count = Column(Integer, default=0)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
