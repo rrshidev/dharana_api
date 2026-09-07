@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     BOT_TOKEN: str = ""
     BOT_ADMIN_KEY: str = ""
 
+    # Проверка доставляемости почты (DNS MX) при регистрации. Отключать
+    # только в тестах/изолированных средах без внешнего DNS.
+    EMAIL_DELIVERABILITY_CHECK: bool = True
+
     @property
     def cors_origins_list(self) -> List[str]:
         return json.loads(self.CORS_ORIGINS)

@@ -1,11 +1,13 @@
 import secrets
 from datetime import datetime, timedelta
 
+from email_validator import EmailNotValidError, validate_email
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models.models import User, PendingTelegramAuth
 from app.services.auth_service import (
@@ -20,15 +22,41 @@ from app.services.telegram_avatar import fetch_telegram_avatar
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# Одноразовые/мусорные почтовые домены (часть большей общедоступной базы).
+DISPOSABLE_DOMAINS = {
+    "10minutemail.com", "10minutemail.net", "0-mail.com", "0mks.com", "00peep.com",
+    "antireg.ru", "binkmail.com", "boxthemail.net", "burnermail.io", "burneremail.net",
+    "discard.email", "discardmail.com", "discardmail.de", "dispostable.com",
+    "email2me.net", "emailnator.com", "emailondeck.com", "emltmp.com", "fexbox.com",
+    "fakeinbox.com", "getnada.com", "guerrillamail.biz", "guerrillamail.com",
+    "guerrillamail.net", "guerrillamail.org", "guerrillamail.info", "gustr.com",
+    "inboxes.com", "instantmail.de", "jetable.fr", "just4spam.com", "kaback.de",
+    "mail2nowhere.com", "mailbiz.biz", "mailcatch.com", "maildrop.cc", "mailforspam.com",
+    "mailinator.com", "mailinator.net", "mailinator.org", "mailmetrash.com",
+    "mailnesia.com", "mailtemp.net", "mailslite.com", "mintemail.com", "mjtmail.com",
+    "moakt.cc", "moakt.co", "moakt.com", "moakt.ws", "mytrashmail.com", "mytemp.email",
+    "nada.email", "nicemail.com", "noblies.net", "nomail.xl.cx", "no-spam.ws",
+    "nowmymail.com", "onetimeusemail.com", "plasticinbox.com", "quickinbox.com",
+    "sharklasers.com", "slmail.me", "snkmail.com", "soadmail.com", "spam4.me",
+    "spambob.com", "spambox.us", "spameater.com", "spamgourmet.com", "spamhole.com",
+    "spam.la", "spamspired.com", "sneakemail.com", "soodonims.com", "sosweet.org",
+    "temporaryinbox.com", "tempinbox.com", "tempmail.com", "tempmail.net",
+    "tempmail.org", "tempmail.io", "temp-mail.org", "temp-mail.io", "throwawaymail.com",
+    "trashmail.com", "trashmail.net", "trashmail.org", "trashmail.ws", "trashymail.com",
+    "turtle-mail.com", "veryrealemail.com", "welcomea.com", "whyspam.me",
+    "yopmail.com", "yopmail.fr", "yopmail.net", "yopmail.org", "zoemail.org",
+}
+
 
 class RegisterRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
     name: str
+    website: str = ""  # honeypot: скрытое поле для ботов
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 
@@ -57,13 +85,42 @@ class UserResponse(BaseModel):
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == body.email))
+    # Honeypot: поле "website" люди не заполняют. Ботам отвечаем 400, пользователя не создаём.
+    if body.website:
+        raise HTTPException(status_code=400, detail="SPAM")
+
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="PASSWORD_TOO_SHORT")
+    if len(body.password) > 128:
+        raise HTTPException(status_code=400, detail="PASSWORD_TOO_LONG")
+
+    email = body.email.strip().casefold()
+
+    try:
+        validate_email(email, check_deliverability=False)
+    except EmailNotValidError:
+        raise HTTPException(status_code=400, detail="EMAIL_INVALID")
+
+    if email.rsplit("@", 1)[1] in DISPOSABLE_DOMAINS:
+        raise HTTPException(status_code=400, detail="EMAIL_DISPOSABLE")
+
+    # Доставляемость (DNS MX). Fail-open: при сетевом/ДНС сбое пропускаем,
+    # чтобы не блокировать легальную регистрацию из-за проблем DNS.
+    if settings.EMAIL_DELIVERABILITY_CHECK:
+        try:
+            validate_email(email, check_deliverability=True)
+        except EmailNotValidError:
+            raise HTTPException(status_code=400, detail="EMAIL_NOT_DELIVERABLE")
+        except Exception:
+            pass
+
+    result = await db.execute(select(User).where(User.email == email))
     existing = result.scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
     user = User(
-        email=body.email,
+        email=email,
         hashed_password=hash_password(body.password),
         name=body.name,
     )
@@ -82,7 +139,8 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == body.email))
+    email = body.email.strip().casefold()
+    result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
     if user is None or not verify_password(body.password, user.hashed_password or ""):
         raise HTTPException(status_code=401, detail="Invalid email or password")
