@@ -1,4 +1,4 @@
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, func
@@ -13,6 +13,11 @@ router = APIRouter(prefix="/practice", tags=["practice"])
 
 FREE_REPEATABLE_LIMIT = 3
 
+# Автоматически завершаем активную сессию, если она «висит» дольше этого срока
+# (вкладка закрылась/приложение убито/таймер упал и т.п.) и пользователь хочет
+# начать новую практику, не дожидаясь ручного сброса.
+SESSION_TTL = timedelta(hours=4)
+
 
 class StartSessionRequest(BaseModel):
     sequence_id: int | None = None
@@ -22,6 +27,52 @@ class CompleteSessionRequest(BaseModel):
     asanas_practiced: list[str] = []
     asana_durations: dict[str, int] = {}
     rest_seconds: int = 15
+
+
+@router.delete("/{session_id}")
+async def cancel_session(
+    session_id: int,
+    user: User = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(PracticeSession).where(
+            PracticeSession.id == session_id,
+            PracticeSession.user_id == user.id,
+        )
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.status != "active":
+        raise HTTPException(status_code=400, detail="Session is not active")
+
+    session.status = "cancelled"
+    session.completed_at = datetime.utcnow()
+    await db.commit()
+    return {"ok": True, "id": session_id, "status": "cancelled"}
+
+
+@router.get("/active")
+async def active_session(
+    user: User = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(PracticeSession).where(
+            PracticeSession.user_id == user.id,
+            PracticeSession.status == "active",
+        )
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        return {"active": False}
+    return {
+        "active": True,
+        "id": session.id,
+        "started_at": session.started_at.isoformat() if session.started_at else None,
+        "asanas_practiced": session.asanas_practiced or [],
+    }
 
 
 @router.post("/start")
@@ -38,7 +89,13 @@ async def start_session(
     )
     active = result.scalar_one_or_none()
     if active:
-        raise HTTPException(status_code=400, detail="Active session already exists")
+        now = datetime.utcnow()
+        started = active.started_at or now
+        if now - started < SESSION_TTL:
+            raise HTTPException(status_code=400, detail="Active session already exists")
+        # Сессия «висит» дольше TTL — авто-завершаем и даём начать новую.
+        active.status = "cancelled"
+        active.completed_at = now
 
     session = PracticeSession(user_id=user.id, sequence_id=body.sequence_id)
     db.add(session)
