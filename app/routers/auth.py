@@ -94,6 +94,10 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     if len(body.password) > 128:
         raise HTTPException(status_code=400, detail="PASSWORD_TOO_LONG")
 
+    name = (body.name or "").strip()
+    if len(name) > 60:
+        raise HTTPException(status_code=400, detail="NAME_TOO_LONG")
+
     email = body.email.strip().casefold()
 
     try:
@@ -122,7 +126,7 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     user = User(
         email=email,
         hashed_password=hash_password(body.password),
-        name=body.name,
+        name=name,
     )
     db.add(user)
     await db.commit()

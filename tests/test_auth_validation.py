@@ -50,6 +50,24 @@ async def test_password_too_long(client):
     assert r.json()["detail"] == "PASSWORD_TOO_LONG"
 
 
+async def test_name_too_long(client):
+    r = await _register(client, name="N" * 61)
+    assert r.status_code == 400
+    assert r.json()["detail"] == "NAME_TOO_LONG"
+
+
+async def test_name_trimmed_on_register(client):
+    payload = {
+        "email": "trim_name@example.com",
+        "password": "secret123",
+        "name": "  Иван Петров  ",
+        "website": "",
+    }
+    r = await client.post("/api/v1/auth/register", json=payload)
+    assert r.status_code == 201
+    assert r.json()["user"]["name"] == "Иван Петров"
+
+
 async def test_invalid_email_syntax(client):
     r = await _register(client, email="not-an-email")
     assert r.status_code == 400
