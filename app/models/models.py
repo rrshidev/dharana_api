@@ -42,6 +42,11 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     is_banned = Column(Boolean, default=False)
     is_deleted = Column(Boolean, default=False)
+
+    # Ненавязчивая верификация email (письмо со ссылкой, вход не блокирует).
+    email_verified = Column(Boolean, default=False, nullable=False)
+    email_verify_sent_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

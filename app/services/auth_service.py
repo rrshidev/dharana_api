@@ -46,6 +46,49 @@ def decode_token(token: str) -> Optional[TokenData]:
         return None
 
 
+def create_email_verify_token(user_id: int, email: str) -> str:
+    """Одноразовый токен верификации почты (48ч, с email-замком)."""
+    expire = datetime.utcnow() + timedelta(hours=48)
+    to_encode = {
+        "sub": str(user_id),
+        "purpose": "verify_email",
+        "email": email,
+        "exp": expire,
+    }
+    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+
+
+def decode_email_verify_token(token: str, email: str) -> Optional[int]:
+    """Возвращает user_id, если токен валиден, того же purpose и по нужному email."""
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+    if payload.get("purpose") != "verify_email":
+        return None
+    if payload.get("email") != email:
+        return None
+    try:
+        return int(payload["sub"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def decode_email_verify_claims(token: str) -> Optional[tuple[int, str]]:
+    """Проверка подписи/срока/purpose БЕЗ email-замка. Возвращает (user_id, email)."""
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+    if payload.get("purpose") != "verify_email":
+        return None
+    email = payload.get("email")
+    try:
+        return (int(payload["sub"]), str(email))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: AsyncSession = Depends(get_db),

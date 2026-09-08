@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     # только в тестах/изолированных средах без внешнего DNS.
     EMAIL_DELIVERABILITY_CHECK: bool = True
 
+    # SMTP.BZ — транзакционная почта (верификация email при регистрации).
+    # API_SMPT: ключ (Authorization header). Пусто — отправка молча пропускается.
+    API_SMPT: str = ""
+    SMTPBZ_FROM: str = "noreply@dharana.ru"
+    SMTPBZ_FROM_NAME: str = "Dharana"
+    # Базовый URL веб-приложения для ссылок верификации из писем.
+    EMAIL_VERIFY_BASE_URL: str = "https://dharana.ru"
+
     @property
     def cors_origins_list(self) -> List[str]:
         return json.loads(self.CORS_ORIGINS)

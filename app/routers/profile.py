@@ -37,6 +37,7 @@ async def get_profile(user: User = Depends(require_user)):
         "bio": user.bio,
         "avatar_url": user.avatar_url,
         "telegram_id": user.telegram_id,
+        "email_verified": user.email_verified,
         "is_admin": user.is_admin,
         "total_practice_minutes": user.total_practice_minutes,
         "total_practice_days": user.total_practice_days,

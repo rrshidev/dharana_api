@@ -16,9 +16,15 @@ from app.services.auth_service import (
     create_access_token,
     require_user,
     get_current_user,
+    create_email_verify_token,
+    decode_email_verify_claims,
 )
 from app.services.notify_service import notify_new_user
 from app.services.telegram_avatar import fetch_telegram_avatar
+from app.services.email_service import (
+    send_verification_email_async,
+    send_verification_email_now,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -134,6 +140,11 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
     await notify_new_user(user.name or user.email or f"User #{user.id}", "email")
 
+    # Ненавязчивая верификация: вход не блокируем, письмо уходит в фоне.
+    # Верификация пригодится при восстановлении профиля, если потеряете доступ.
+    verify_token = create_email_verify_token(user.id, user.email)
+    send_verification_email_async(user.email, verify_token)
+
     token = create_access_token(user.id)
     return TokenResponse(
         access_token=token,
@@ -154,6 +165,55 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
         access_token=token,
         user={"id": user.id, "email": user.email, "name": user.name},
     )
+
+
+@router.get("/verify-email")
+async def verify_email(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Ссылка из письма верификации. Публичный эндпоинт: JWT содержит и email-замок.
+
+    Идемпотентен: повторный переход (уже верифицировано) тоже возвращает ok.
+    """
+    claims = decode_email_verify_claims(token)
+    if claims is None:
+        raise HTTPException(status_code=400, detail="INVALID_VERIFICATION_TOKEN")
+    user_id, token_email = claims
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None or user.email != token_email:
+        raise HTTPException(status_code=400, detail="INVALID_VERIFICATION_TOKEN")
+
+    if not user.email_verified:
+        user.email_verified = True
+        await db.commit()
+
+    return {"ok": True}
+
+
+@router.post("/verify-email/send")
+async def send_verify_email(
+    user: User = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Повторная отправка письма верификации (кнопка в профиле). Rate-limit 1/мин."""
+    if not user.email:
+        raise HTTPException(status_code=400, detail="NO_EMAIL")
+    if user.email_verified:
+        raise HTTPException(status_code=400, detail="ALREADY_VERIFIED")
+
+    now = datetime.utcnow()
+    if user.email_verify_sent_at and (now - user.email_verify_sent_at) < timedelta(minutes=1):
+        raise HTTPException(status_code=429, detail="TOO_FREQUENT")
+
+    user.email_verify_sent_at = now
+    await db.commit()
+
+    token = create_email_verify_token(user.id, user.email)
+    sent = await send_verification_email_now(user.email, token)
+    return {"ok": True, "sent": sent}
 
 
 @router.post("/telegram/create-code")
@@ -333,6 +393,7 @@ async def get_me(user: User = Depends(require_user)):
         "bio": user.bio,
         "avatar_url": user.avatar_url,
         "telegram_id": user.telegram_id,
+        "email_verified": user.email_verified,
         "is_admin": user.is_admin,
         "total_practice_minutes": user.total_practice_minutes,
         "total_practice_days": user.total_practice_days,

@@ -15,3 +15,6 @@ os.environ["JWT_EXPIRE_MINUTES"] = "59"
 os.environ["BOT_DATA_DIR"] = os.path.join(_TMP, "bot_data")
 # Внешний DNS-поиск в тестах не делаем
 os.environ["EMAIL_DELIVERABILITY_CHECK"] = "false"
+# Секрет SMTP.BZ не должен просачиваться из .env в тесты (реальные отправки не нужны)
+os.environ["API_SMPT"] = ""
+os.environ["SMTPBZ_FROM"] = "noreply@dharana.ru"
