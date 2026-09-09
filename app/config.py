@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     # Базовый URL веб-приложения для ссылок верификации из писем.
     EMAIL_VERIFY_BASE_URL: str = "https://dharana.ru"
 
+    # Google OAuth 2.0 — Client ID/Secret из Google Cloud Console.
+    # GOOGLE_CLIENT_ID (Web) используется и для валидации audience web-токенов.
+    # GOOGLE_ANDROID_CLIENT_ID — для id_token'ов от Flutter (google_sign_in).
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_ANDROID_CLIENT_ID: str = ""
+
     @property
     def cors_origins_list(self) -> List[str]:
         return json.loads(self.CORS_ORIGINS)

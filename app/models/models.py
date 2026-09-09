@@ -16,6 +16,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String(255), unique=True, nullable=True, index=True)
     telegram_id = Column(Integer, unique=True, nullable=True, index=True)
+    google_id = Column(String(255), unique=True, nullable=True, index=True)
     hashed_password = Column(String(255), nullable=True)
     name = Column(String(255), nullable=True)
     last_name = Column(String(255), nullable=True)

@@ -25,6 +25,7 @@ from app.services.email_service import (
     send_verification_email_async,
     send_verification_email_now,
 )
+from app.services.google import decode_google_id_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -74,6 +75,13 @@ class TelegramLoginRequest(BaseModel):
 
 class TelegramCodeRequest(BaseModel):
     code: str
+
+
+class GoogleLoginRequest(BaseModel):
+    """id_token от Google (Google Identity Services / google_sign_in)."""
+    id_token: str
+    name: str | None = None
+    avatar_url: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -164,6 +172,80 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     return TokenResponse(
         access_token=token,
         user={"id": user.id, "email": user.email, "name": user.name},
+    )
+
+
+@router.post("/google", response_model=TokenResponse)
+async def google_login(body: GoogleLoginRequest, db: AsyncSession = Depends(get_db)):
+    """Google Sign-In: принимает id_token от Google, валидирует подпись/audience,
+    находит или создаёт пользователя по google_id (сверяя email), выдаёт наш JWT.
+    """
+    if not settings.GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=501, detail="GOOGLE_NOT_CONFIGURED")
+
+    audiences = [settings.GOOGLE_CLIENT_ID]
+    if settings.GOOGLE_ANDROID_CLIENT_ID:
+        audiences.append(settings.GOOGLE_ANDROID_CLIENT_ID)
+
+    claims = decode_google_id_token(body.id_token, audiences)
+    if claims is None:
+        raise HTTPException(status_code=401, detail="INVALID_GOOGLE_TOKEN")
+
+    sub = claims.get("sub")
+    email = (claims.get("email") or "").strip().casefold() or None
+    name = claims.get("name") or body.name
+    picture = claims.get("picture") or body.avatar_url
+
+    if not sub:
+        raise HTTPException(status_code=401, detail="INVALID_GOOGLE_TOKEN")
+
+    result = await db.execute(select(User).where(User.google_id == sub))
+    user = result.scalar_one_or_none()
+
+    if user is None and email:
+        # Нет аккаунта по google_id, но есть по email — привязываем google_id (нужен токен Google, т.к. email подтверждён).
+        email_result = await db.execute(select(User).where(User.email == email))
+        user = email_result.scalar_one_or_none()
+        if user:
+            user.google_id = sub
+
+    is_new = False
+    if user is None:
+        user = User(
+            google_id=sub,
+            email=email,
+            name=name or (email.split("@", 1)[0] if email else f"user_{sub[-6:]}"),
+            avatar_url=picture,
+            email_verified=True if email else False,  # Google уже верифицировал почту
+        )
+        db.add(user)
+        is_new = True
+    else:
+        # Обновляем недостающие данные
+        if name and not user.name:
+            user.name = name
+        if picture and not user.avatar_url:
+            user.avatar_url = picture
+        if email and not user.email:
+            user.email = email
+        if email and not user.email_verified:
+            user.email_verified = True
+
+    await db.commit()
+    await db.refresh(user)
+
+    if is_new:
+        await notify_new_user(user.name or user.email or f"User #{user.id}", "google")
+
+    token = create_access_token(user.id)
+    return TokenResponse(
+        access_token=token,
+        user={
+            "id": user.id,
+            "email": user.email,
+            "name": user.name,
+            "google_id": user.google_id,
+        },
     )
 
 
