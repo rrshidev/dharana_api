@@ -1,0 +1,77 @@
+name: Deploy API
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Деплой на VPS (/opt/dharana, compose-сервис dharana-api).
+# Требуемые secrets (добавить в GitHub -> Settings -> Secrets and variables -> Actions):
+#   DHARANA_SSH_HOST   - IP VPS (212.192.22.6)
+#   DHARANA_SSH_PORT   - SSH-порт (см. ~/.ssh/config, dharana_ai)
+#   DHARANA_SSH_USER   - пользователь (yogin_ai)
+#   DHARANA_SSH_KEY    - приватный ключ целиком (BEGIN/END RSA/ED25519 без пароля)
+# Деploy копирует только исходники (app, migrations, alembic.ini, Dockerfile, requirements, pytest.ini)
+# и НЕ трогает runtime-данные (/opt/dharana/data, /media, /uploads).
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Run tests
+        run: pytest -q
+
+  deploy:
+    name: Deploy to VPS
+    needs: [test]
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Package sources
+        run: tar -czf dharana-api.tar.gz app migrations alembic.ini Dockerfile requirements.txt pytest.ini
+
+      - name: Copy to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DHARANA_SSH_HOST }}
+          port: ${{ secrets.DHARANA_SSH_PORT }}
+          username: ${{ secrets.DHARANA_SSH_USER }}
+          key: ${{ secrets.DHARANA_SSH_KEY }}
+          source: "dharana-api.tar.gz"
+          target: "/tmp/dharana_deploy"
+
+      - name: Extract, rebuild, restart, migrate, verify
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DHARANA_SSH_HOST }}
+          port: ${{ secrets.DHARANA_SSH_PORT }}
+          username: ${{ secrets.DHARANA_SSH_USER }}
+          key: ${{ secrets.DHARANA_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/dharana
+            sudo tar -xzf /tmp/dharana_deploy/dharana-api.tar.gz -C ./dharana-api
+            sudo docker compose build dharana-api
+            sudo docker compose up -d dharana-api
+            sudo docker compose run --rm --no-deps dharana-api alembic upgrade head
+            sleep 8
+            curl -fsS http://localhost:8000/api/v1/health || true
