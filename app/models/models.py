@@ -47,6 +47,8 @@ class User(Base):
     # Ненавязчивая верификация email (письмо со ссылкой, вход не блокирует).
     email_verified = Column(Boolean, default=False, nullable=False)
     email_verify_sent_at = Column(DateTime, nullable=True)
+    # Сброс пароля: когда последний раз слали письмо (rate-limit 1/мин).
+    password_reset_sent_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -89,6 +89,33 @@ def decode_email_verify_claims(token: str) -> Optional[tuple[int, str]]:
         return None
 
 
+def create_password_reset_token(user_id: int, email: str) -> str:
+    """Одноразовый токен сброса пароля (30 мин, с email-замком)."""
+    expire = datetime.utcnow() + timedelta(minutes=30)
+    to_encode = {
+        "sub": str(user_id),
+        "purpose": "password_reset",
+        "email": email,
+        "exp": expire,
+    }
+    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+
+
+def decode_password_reset_claims(token: str) -> Optional[tuple[int, str]]:
+    """Проверка подписи/срока/purpose/email-замка. Возвращает (user_id, email)."""
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+    if payload.get("purpose") != "password_reset":
+        return None
+    email = payload.get("email")
+    try:
+        return (int(payload["sub"]), str(email))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: AsyncSession = Depends(get_db),

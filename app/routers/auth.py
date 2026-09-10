@@ -18,12 +18,15 @@ from app.services.auth_service import (
     get_current_user,
     create_email_verify_token,
     decode_email_verify_claims,
+    create_password_reset_token,
+    decode_password_reset_claims,
 )
 from app.services.notify_service import notify_new_user
 from app.services.telegram_avatar import fetch_telegram_avatar
 from app.services.email_service import (
     send_verification_email_async,
     send_verification_email_now,
+    send_password_reset_email_async,
 )
 from app.services.google import decode_google_id_token
 
@@ -82,6 +85,15 @@ class GoogleLoginRequest(BaseModel):
     id_token: str
     name: str | None = None
     avatar_url: str | None = None
+
+
+class PasswordResetRequest(BaseModel):
+    email: str
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    token: str
+    password: str
 
 
 class TokenResponse(BaseModel):
@@ -296,6 +308,64 @@ async def send_verify_email(
     token = create_email_verify_token(user.id, user.email)
     sent = await send_verification_email_now(user.email, token)
     return {"ok": True, "sent": sent}
+
+
+@router.post("/password-reset/send")
+async def send_password_reset(body: PasswordResetRequest, db: AsyncSession = Depends(get_db)):
+    """Запрос письма сброса пароля. Публичный.
+
+    Ответ НЕ различает существующий/несуществующий email (анти-энумерация):
+    всегда {ok:true}. Rate-limit 1/мин по user.password_reset_sent_at.
+    """
+    email = body.email.strip().casefold()
+    try:
+        validate_email(email, check_deliverability=False)
+    except EmailNotValidError:
+        raise HTTPException(status_code=400, detail="EMAIL_INVALID")
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    if user is None or not user.hashed_password:
+        # Аккаунта с таким паролем нет (email-аккаунт или юзер без пароля) —
+        # для Google/Telegram-юзеров письмо не шлём, но отвечаем одинаково.
+        return {"ok": True}
+
+    now = datetime.utcnow()
+    if user.password_reset_sent_at and (now - user.password_reset_sent_at) < timedelta(minutes=1):
+        raise HTTPException(status_code=429, detail="TOO_FREQUENT")
+
+    user.password_reset_sent_at = now
+    await db.commit()
+
+    token = create_password_reset_token(user.id, user.email)
+    send_password_reset_email_async(user.email, token)
+    return {"ok": True}
+
+
+@router.post("/password-reset/confirm")
+async def confirm_password_reset(body: PasswordResetConfirmRequest, db: AsyncSession = Depends(get_db)):
+    """Установка нового пароля по токену из письма. Публичный, одноразовый по email-замку."""
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="PASSWORD_TOO_SHORT")
+    if len(body.password) > 128:
+        raise HTTPException(status_code=400, detail="PASSWORD_TOO_LONG")
+
+    claims = decode_password_reset_claims(body.token)
+    if claims is None:
+        raise HTTPException(status_code=400, detail="INVALID_RESET_TOKEN")
+    user_id, token_email = claims
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None or user.email != token_email:
+        raise HTTPException(status_code=400, detail="INVALID_RESET_TOKEN")
+
+    user.hashed_password = hash_password(body.password)
+    # Доступ к почте подтверждён фактом получения письма.
+    user.email_verified = True
+    await db.commit()
+
+    return {"ok": True}
 
 
 @router.post("/telegram/create-code")

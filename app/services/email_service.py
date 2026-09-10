@@ -94,3 +94,33 @@ async def send_verification_email_now(email: str, token: str) -> bool:
     """Синхронная отправка (кнопка «Отправить ещё раз»)."""
     link = f"{settings.EMAIL_VERIFY_BASE_URL}/verify-email?token={token}"
     return await send_email(email, "Подтвердите почту — Dharana", build_verify_html(link))
+
+
+def build_reset_html(link: str) -> str:
+    """Минимальный HTML письма сброса пароля (одна кнопка)."""
+    return (
+        "<div style='font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto;"
+        "padding:24px;color:#1f2937'>"
+        "<h2 style='font-size:20px;margin:0 0 12px'>Восстановление пароля</h2>"
+        "<p style='font-size:14px;line-height:1.6;margin:0 0 20px'>"
+        "Мы получили запрос на сброс пароля. Если это были вы — нажмите кнопку, "
+        "чтобы задать новый пароль. Ссылка действует 30 минут.</p>"
+        "<a href='%s' style='display:inline-block;background:#22c55e;color:#ffffff;"
+        "text-decoration:none;padding:12px 22px;border-radius:9999px;font-size:14px;"
+        "font-weight:600'>Сбросить пароль</a>"
+        "<p style='font-size:12px;color:#6b7280;margin:20px 0 0'>Если письмо открыли "
+        "случайно — просто проигнорируйте его.</p>"
+        "</div>"
+    ) % link
+
+
+def send_password_reset_email_async(email: str, token: str) -> None:
+    """Фоновая отправка письма сброса пароля (не блокирует ответ)."""
+    link = f"{settings.EMAIL_VERIFY_BASE_URL}/reset-password?token={token}"
+    _spawn(send_email(email, "Сброс пароля — Dharana", build_reset_html(link)))
+
+
+async def send_password_reset_email_now(email: str, token: str) -> bool:
+    """Синхронная отправка письма сброса пароля."""
+    link = f"{settings.EMAIL_VERIFY_BASE_URL}/reset-password?token={token}"
+    return await send_email(email, "Сброс пароля — Dharana", build_reset_html(link))
