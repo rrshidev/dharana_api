@@ -57,7 +57,7 @@ jobs:
           username: ${{ secrets.DHARANA_SSH_USER }}
           key: ${{ secrets.DHARANA_SSH_KEY }}
           source: "dharana-api.tar.gz"
-          target: "/tmp/dharana_deploy"
+          target: "/tmp/dharana_deploy_${{ github.run_id }}"
 
       - name: Extract, rebuild, restart, migrate, verify
         uses: appleboy/ssh-action@v1.2.0
@@ -69,7 +69,7 @@ jobs:
           script: |
             set -e
             cd /opt/dharana
-            sudo tar -xzf /tmp/dharana_deploy/dharana-api.tar.gz -C ./dharana-api
+            sudo tar -xzf /tmp/dharana_deploy_${{ github.run_id }}/dharana-api.tar.gz -C ./dharana-api
             sudo docker compose build dharana-api
             sudo docker compose up -d dharana-api
             sudo docker compose run --rm --no-deps dharana-api alembic upgrade head
