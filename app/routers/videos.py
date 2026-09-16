@@ -19,6 +19,12 @@ async def _check_premium(user: User, db: AsyncSession) -> bool:
     return sub.is_premium if sub else False
 
 
+@router.get("/asanas/names")
+async def list_asana_video_names(db: AsyncSession = Depends(get_db)):
+    names = await video_service.get_asana_video_names(db)
+    return {"names": names}
+
+
 @router.get("/asana/{asana_name}")
 async def get_asana_video(
     asana_name: str,

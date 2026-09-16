@@ -194,6 +194,13 @@ class VideoService:
         )
         return result.scalar_one_or_none()
 
+    async def get_asana_video_names(self, db: AsyncSession) -> List[str]:
+        """Names of asanas that have a catalog (asana) video."""
+        result = await db.execute(
+            select(Video.asana_name).where(Video.video_type == "asana")
+        )
+        return sorted({name for name in result.scalars().all() if name})
+
     async def get_sequences(
         self, is_premium: Optional[bool] = None, db: AsyncSession = None
     ) -> List[Video]:
