@@ -7,11 +7,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.models import User, PracticeSession
 from app.services.auth_service import require_user
-from app.services.subscription_service import get_subscription_status
+from app.services.subscription_service import get_subscription_status, consume_generation
+from app.services.sequence_generator import sequence_generator
 
 router = APIRouter(prefix="/practice", tags=["practice"])
 
 FREE_REPEATABLE_LIMIT = 3
+
+# Лимит бесплатных генераций практики в сутки (общий с ботом).
+DAILY_GENERATION_LIMIT = 1
+
+
+class GenerateSequenceRequest(BaseModel):
+    difficulty: str = "beginner"
+    duration_minutes: int = 30
+    focus: str = "back"
 
 # Автоматически завершаем активную сессию, если она «висит» дольше этого срока
 # (вкладка закрылась/приложение убито/таймер упал и т.п.) и пользователь хочет
@@ -153,6 +163,42 @@ async def complete_session(
         "ok": True,
         "total_duration_seconds": total_seconds,
         "asanas_count": len(body.asanas_practiced),
+    }
+
+
+@router.post("/generate")
+async def generate_sequence(
+    body: GenerateSequenceRequest,
+    user: User = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if body.difficulty not in ("beginner", "intermediate", "advanced"):
+        raise HTTPException(status_code=422, detail="INVALID_DIFFICULTY")
+    if body.duration_minutes not in (15, 30, 60):
+        raise HTTPException(status_code=422, detail="INVALID_DURATION")
+    if body.focus not in ("back", "legs", "balance", "flexibility", "energy"):
+        raise HTTPException(status_code=422, detail="INVALID_FOCUS")
+
+    allowed = await consume_generation(db, user.id)
+    if not allowed:
+        status = await get_subscription_status(db, user.id)
+        raise HTTPException(
+            status_code=403,
+            detail=status,
+        )
+
+    sequence = sequence_generator.generate_sequence(
+        difficulty=body.difficulty,
+        duration_minutes=body.duration_minutes,
+        focus=body.focus,
+    )
+    status = await get_subscription_status(db, user.id)
+    return {
+        **sequence,
+        "is_premium": status["is_premium"],
+        "can_generate": status["can_generate"],
+        "daily_generations_used": status["daily_generations_used"],
+        "daily_generation_limit": None if status["is_premium"] else DAILY_GENERATION_LIMIT,
     }
 
 

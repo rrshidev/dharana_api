@@ -49,6 +49,38 @@ async def get_subscription_status(db: AsyncSession, user_id: int) -> dict:
     }
 
 
+async def consume_generation(db: AsyncSession, user_id: int) -> bool:
+    """Списывает одну генерацию практики.
+
+    Премиум/триал — не считаем (True). Бесплатный — 1 генерация в сутки
+    (счётчик в тех же полях app_user_subscriptions, что и у бота).
+    Возвращает False, если лимит исчерпан.
+    """
+    sub = await get_or_create_subscription(db, user_id)
+
+    now = datetime.utcnow()
+    is_active = False
+    if sub.is_premium and sub.subscription_end and now < sub.subscription_end:
+        is_active = True
+    if sub.trial_used and sub.trial_end and now < sub.trial_end:
+        is_active = True
+    if is_active:
+        return True
+
+    today = date.today()
+    if sub.last_generation_date != today:
+        sub.last_generation_date = today
+        sub.daily_generations_used = 1
+        await db.commit()
+        return True
+
+    if sub.daily_generations_used < 1:
+        sub.daily_generations_used += 1
+        await db.commit()
+        return True
+    return False
+
+
 async def activate_trial(db: AsyncSession, user_id: int, days: int = 7) -> UserSubscription:
     from datetime import timedelta
 
