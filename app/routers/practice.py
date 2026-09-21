@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.models import User, PracticeSession
 from app.services.auth_service import require_user
+from app.services.asana_service import resolve_lang
 from app.services.subscription_service import get_subscription_status, consume_generation
 from app.services.sequence_generator import sequence_generator
 
@@ -22,6 +23,7 @@ class GenerateSequenceRequest(BaseModel):
     difficulty: str = "beginner"
     duration_minutes: int = 30
     focus: str = "back"
+    lang: str = "ru"
 
 # Автоматически завершаем активную сессию, если она «висит» дольше этого срока
 # (вкладка закрылась/приложение убито/таймер упал и т.п.) и пользователь хочет
@@ -191,6 +193,7 @@ async def generate_sequence(
         difficulty=body.difficulty,
         duration_minutes=body.duration_minutes,
         focus=body.focus,
+        lang=resolve_lang(body.lang),
     )
     status = await get_subscription_status(db, user.id)
     return {

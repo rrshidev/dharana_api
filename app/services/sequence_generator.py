@@ -82,10 +82,15 @@ class SequenceGenerator:
                 break
         return picked
 
-    def _build_item(self, name: str, category: str, duration_seconds: int, rest_seconds: int) -> Dict:
-        detail = asana_service.get_asana_detail(name) or {}
+    def _build_item(
+        self, name: str, category: str, duration_seconds: int, rest_seconds: int,
+        lang: str = "ru",
+    ) -> Dict:
+        detail = asana_service.get_asana_detail(name, lang) or {}
         return {
             "name": name,
+            "name_en": detail.get("name_en"),
+            "name_ru": detail.get("name_ru"),
             "category_id": category,
             "category_name": detail.get("category_name") or category,
             "description": detail.get("description") or "",
@@ -101,6 +106,7 @@ class SequenceGenerator:
         difficulty: str,
         duration_minutes: int,
         focus: str,
+        lang: str = "ru",
     ) -> Dict:
         max_difficulty = DIFFICULTY_MAX[difficulty]
         total_seconds = duration_minutes * 60
@@ -117,7 +123,7 @@ class SequenceGenerator:
         warmup_items = self._build_section(
             warmup_pool, warmup_seconds, min_seconds=20, max_seconds=60,
             item_pool_count_estimate=40, min_count=3, max_count=10,
-            rest_seconds=0, used_names=used_names,
+            rest_seconds=0, used_names=used_names, lang=lang,
         )
         items.extend(warmup_items)
 
@@ -130,7 +136,7 @@ class SequenceGenerator:
         main_items = self._build_section(
             main_pool, main_seconds, min_seconds=45, max_seconds=90,
             item_pool_count_estimate=75, min_count=4, max_count=24,
-            rest_seconds=REST_SECONDS, used_names=used_names,
+            rest_seconds=REST_SECONDS, used_names=used_names, lang=lang,
         )
         items.extend(main_items)
 
@@ -139,7 +145,7 @@ class SequenceGenerator:
         cooldown_items = self._build_section(
             cooldown_pool, cooldown_seconds, min_seconds=20, max_seconds=60,
             item_pool_count_estimate=45, min_count=2, max_count=6,
-            rest_seconds=0, used_names=used_names,
+            rest_seconds=0, used_names=used_names, lang=lang,
         )
         items.extend(cooldown_items)
 
@@ -169,6 +175,7 @@ class SequenceGenerator:
         max_count: int,
         rest_seconds: int,
         used_names: set,
+        lang: str = "ru",
     ) -> List[Dict]:
         if not pool:
             return []
@@ -183,7 +190,7 @@ class SequenceGenerator:
             used_names.add(name)
 
         return [
-            self._build_item(name, category, per_asana, rest_seconds)
+            self._build_item(name, category, per_asana, rest_seconds, lang)
             for name, category, _difficulty in selected
         ]
 

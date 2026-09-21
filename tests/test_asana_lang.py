@@ -100,3 +100,25 @@ def test_categories_localized():
     en = {c["id"]: c["display_name"] for c in asana_service.get_all_categories("en")}
     assert ru["stay+"] == "Асаны стоя"
     assert en["stay+"] == "Standing Asanas"
+
+
+def test_generate_sequence_localized(catalog):
+    from app.services.sequence_generator import sequence_generator
+
+    seq_en = sequence_generator.generate_sequence(
+        difficulty="beginner", duration_minutes=15, focus="balance", lang="en"
+    )
+    assert seq_en["items"]
+    assert all("name_en" in i and "name_ru" in i for i in seq_en["items"])
+    item = next(i for i in seq_en["items"] if i["name"] == catalog)
+    assert item["name_en"] == "TEST ASANA"
+    assert item["name_ru"] == catalog
+    assert item["category_name"] == "Standing Asanas"
+
+    seq_ru = sequence_generator.generate_sequence(
+        difficulty="beginner", duration_minutes=15, focus="balance", lang="ru"
+    )
+    item_ru = next(i for i in seq_ru["items"] if i["name"] == catalog)
+    assert item_ru["name_en"] == "TEST ASANA"
+    assert item_ru["name_ru"] == catalog
+    assert item_ru["category_name"] == "Асаны стоя"
