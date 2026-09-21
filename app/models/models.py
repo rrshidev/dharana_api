@@ -30,6 +30,9 @@ class User(Base):
     timezone = Column(String(50), default="UTC")
     last_daily_asana_date = Column(Date, default=None)
 
+    # Язык интерфейса пользователя (bot/app): "ru" | "en"
+    language = Column(String(5), nullable=False, default="ru", server_default="ru")
+
     # Статистика (боти + приложение)
     total_practices = Column(Integer, default=0)
     streak_days = Column(Integer, default=0)

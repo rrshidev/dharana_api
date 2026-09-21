@@ -74,6 +74,7 @@ class TelegramLoginRequest(BaseModel):
     telegram_id: int
     name: str | None = None
     username: str | None = None
+    language: str | None = None
 
 
 class TelegramCodeRequest(BaseModel):
@@ -382,6 +383,7 @@ async def create_telegram_code(body: TelegramLoginRequest, db: AsyncSession = De
             telegram_id=body.telegram_id,
             name=body.name,
             username=body.username,
+            language=(body.language or "ru"),
         )
         db.add(user)
         is_new = True
