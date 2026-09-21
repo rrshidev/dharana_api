@@ -136,7 +136,13 @@ class AsanaService:
                 if effect not in effects:
                     continue
             if search is not None:
-                if search.lower() not in name.lower():
+                q = search.lower()
+                en_names = self._load_en_names()
+                if (
+                    q not in name.lower()
+                    and q not in (en_names.get(name) or "").lower()
+                    and q not in NAME_RU_OVERRIDES.get(name, "").lower()
+                ):
                     continue
             filtered.append((name, cat_key))
 

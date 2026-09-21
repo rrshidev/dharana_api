@@ -102,6 +102,15 @@ def test_categories_localized():
     assert en["stay+"] == "Standing Asanas"
 
 
+def test_search_by_localized_names(catalog):
+    res = asana_service.get_all_asanas(search="TEST ASANA")
+    assert catalog in [a["name"] for a in res["items"]]
+    res_lower = asana_service.get_all_asanas(search="test asana")
+    assert catalog in [a["name"] for a in res_lower["items"]]
+    res_ru = asana_service.get_all_asanas(search="Тестасана")
+    assert catalog in [a["name"] for a in res_ru["items"]]
+
+
 def test_generate_sequence_localized(catalog):
     from app.services.sequence_generator import sequence_generator
 
