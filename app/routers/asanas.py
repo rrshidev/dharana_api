@@ -1,8 +1,8 @@
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Header
 
-from app.services.asana_service import asana_service
+from app.services.asana_service import asana_service, resolve_lang
 
 router = APIRouter(prefix="/asanas", tags=["asanas"])
 
@@ -27,16 +27,23 @@ async def list_asanas(
 
 
 @router.get("/random")
-async def random_asana():
-    asana = asana_service.get_random_asana()
+async def random_asana(
+    lang: Optional[str] = Query(None),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    asana = asana_service.get_random_asana(resolve_lang(lang, accept_language))
     if asana is None:
         return {"error": "No asanas found"}
     return asana
 
 
 @router.get("/{asana_name}")
-async def get_asana(asana_name: str):
-    asana = asana_service.get_asana_detail(asana_name)
+async def get_asana(
+    asana_name: str,
+    lang: Optional[str] = Query(None),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    asana = asana_service.get_asana_detail(asana_name, resolve_lang(lang, accept_language))
     if asana is None:
         return {"error": "Asana not found"}
     return asana

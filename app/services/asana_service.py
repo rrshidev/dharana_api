@@ -17,6 +17,43 @@ CATEGORY_DESCRIPTIONS = {
     "power+": {"display_name": "Силовые асаны", "description": "Список силовых асан"},
 }
 
+CATEGORY_DESCRIPTIONS_EN = {
+    "sit_lie+": {"display_name": "Sitting & Lying Asanas", "description": "Sitting and lying asanas"},
+    "stay+": {"display_name": "Standing Asanas", "description": "Standing asanas"},
+    "hand+": {"display_name": "Arm Balances", "description": "Arm balance asanas"},
+    "coup+": {"display_name": "Inverted Asanas", "description": "Inverted asanas"},
+    "sag+": {"display_name": "Backbends", "description": "Backbending asanas"},
+    "power+": {"display_name": "Strength Asanas", "description": "Strength asanas"},
+}
+
+SUPPORTED_LANGS = ("ru", "en")
+
+# Corrected Russian display names for asanas whose filenames deviate from the
+# proper spelling (typos, all-caps, missing spaces before parentheses).
+NAME_RU_OVERRIDES = {
+    "Маричасана 3": "Маричиасана 3",
+    "Маричасана 4": "Маричиасана 4",
+    "ВИРАБХАДРАСАНА 2": "Вирабхадрасана 2",
+    "Уттхита Баддха Паршваконасанаv": "Уттхита Баддха Паршваконасана",
+    "Васиштхасана(Вариация)": "Васиштхасана (вариация)",
+    "Падангуштха Падма Утткатасана(Баланс)": "Падангуштха Падма Утткатасана (баланс)",
+    "Уттхита Падангуштхасана(в наклоне)": "Уттхита Падангуштхасана (в наклоне)",
+}
+
+
+def resolve_lang(lang: Optional[str], accept_language: Optional[str] = None) -> str:
+    """Resolve the content language from an explicit ?lang= or the Accept-Language header."""
+    if lang:
+        lang = lang.strip().lower()
+        if lang in SUPPORTED_LANGS:
+            return lang
+    if accept_language:
+        for part in accept_language.split(","):
+            code = part.split(";")[0].strip().lower()
+            if code[:2] in SUPPORTED_LANGS:
+                return code[:2]
+    return "ru"
+
 
 class AsanaService:
     def __init__(self):
@@ -24,6 +61,7 @@ class AsanaService:
         self.basics_dir = os.path.join(settings.BOT_DATA_DIR, "basics")
         self.steps_dir = os.path.join(settings.BOT_DATA_DIR, "steps")
         self._categories_cache: Optional[Dict] = None
+        self._en_names_cache: Optional[Dict] = None
 
     def _get_categories(self) -> Dict:
         if self._categories_cache is not None:
@@ -39,6 +77,8 @@ class AsanaService:
             if os.path.isdir(entry_path) and entry in CATEGORY_DESCRIPTIONS:
                 asana_files = set()
                 for f in os.listdir(entry_path):
+                    if f.endswith(".en.txt"):
+                        continue
                     name = os.path.splitext(f)[0]
                     asana_files.add(name)
                 categories[entry] = sorted(asana_files)
@@ -46,11 +86,12 @@ class AsanaService:
         self._categories_cache = categories
         return categories
 
-    def get_all_categories(self) -> List[Dict]:
+    def get_all_categories(self, lang: Optional[str] = None) -> List[Dict]:
         categories = self._get_categories()
+        descriptions = CATEGORY_DESCRIPTIONS_EN if lang == "en" else CATEGORY_DESCRIPTIONS
         result = []
         for cat_key, asana_names in categories.items():
-            info = CATEGORY_DESCRIPTIONS[cat_key]
+            info = descriptions[cat_key]
             result.append({
                 "id": cat_key,
                 "display_name": info["display_name"],
@@ -59,7 +100,7 @@ class AsanaService:
             })
         return result
 
-    def get_category_asanas(self, category_id: str) -> List[Dict]:
+    def get_category_asanas(self, category_id: str, lang: Optional[str] = None) -> List[Dict]:
         categories = self._get_categories()
         if category_id not in categories:
             return []
@@ -105,7 +146,7 @@ class AsanaService:
 
         return {"total": total, "items": items, "limit": limit, "offset": offset}
 
-    def get_asana_detail(self, asana_name: str) -> Optional[Dict]:
+    def get_asana_detail(self, asana_name: str, lang: Optional[str] = None) -> Optional[Dict]:
         categories = self._get_categories()
         category_id = None
         for cat_key, asana_names in categories.items():
@@ -116,9 +157,7 @@ class AsanaService:
         if category_id is None:
             return None
 
-        description = self._read_file(
-            os.path.join(self.catalog_dir, category_id, f"{asana_name}.txt")
-        )
+        description = self._read_description(category_id, asana_name, lang)
 
         image_filename = None
         for ext in (".jpg", ".png"):
@@ -127,10 +166,13 @@ class AsanaService:
                 image_filename = f"{category_id}/{asana_name}{ext}"
                 break
 
+        descriptions = CATEGORY_DESCRIPTIONS_EN if lang == "en" else CATEGORY_DESCRIPTIONS
         return {
             "name": asana_name,
+            "name_en": self._load_en_names().get(asana_name),
+            "name_ru": NAME_RU_OVERRIDES.get(asana_name, asana_name),
             "category_id": category_id,
-            "category_name": CATEGORY_DESCRIPTIONS.get(category_id, {}).get(
+            "category_name": descriptions.get(category_id, {}).get(
                 "display_name", category_id
             ),
             "description": description,
@@ -140,7 +182,7 @@ class AsanaService:
             "contraindications": ASANA_CONTRAINDICATIONS.get(asana_name, []),
         }
 
-    def get_random_asana(self) -> Optional[Dict]:
+    def get_random_asana(self, lang: Optional[str] = None) -> Optional[Dict]:
         categories = self._get_categories()
         all_names = []
         for cat_key, asana_names in categories.items():
@@ -149,7 +191,7 @@ class AsanaService:
         if not all_names:
             return None
         name, cat_key = random.choice(all_names)
-        return self.get_asana_detail(name)
+        return self.get_asana_detail(name, lang)
 
     def get_basics(self) -> List[Dict]:
         if not os.path.exists(self.basics_dir):
@@ -189,11 +231,57 @@ class AsanaService:
 
         return {
             "name": name,
+            "name_en": self._load_en_names().get(name),
+            "name_ru": NAME_RU_OVERRIDES.get(name, name),
             "category_id": category_id,
             "image_url": f"/api/v1/media/photos/{image_filename}" if image_filename else None,
             "difficulty": ASANA_DIFFICULTY.get(name, 1),
             "effects": ASANA_EFFECTS.get(name, []),
         }
+
+    def _load_en_names(self) -> Dict:
+        """Map asana name -> English display name (first line of {name}.en.txt)."""
+        if self._en_names_cache is not None:
+            return self._en_names_cache
+
+        result = {}
+        if not os.path.exists(self.catalog_dir):
+            self._en_names_cache = result
+            return result
+
+        for entry in os.listdir(self.catalog_dir):
+            entry_path = os.path.join(self.catalog_dir, entry)
+            if not os.path.isdir(entry_path) or entry not in CATEGORY_DESCRIPTIONS:
+                continue
+            for f in os.listdir(entry_path):
+                if not f.endswith(".en.txt"):
+                    continue
+                name = f[: -len(".en.txt")]
+                path = os.path.join(entry_path, f)
+                try:
+                    with open(path, "r", encoding="utf-8") as fh:
+                        title = fh.readline().strip()
+                except Exception as e:
+                    logger.error(f"Error reading {path}: {e}")
+                    continue
+                note = title.find(" (")
+                if note != -1:
+                    title = title[:note].strip()
+                if title:
+                    result[name] = title
+
+        self._en_names_cache = result
+        return result
+
+    def _read_description(self, category_id: str, asana_name: str, lang: Optional[str]) -> str:
+        """Read the asana description, preferring the localized .en.txt when requested."""
+        if lang == "en":
+            localized = os.path.join(self.catalog_dir, category_id, f"{asana_name}.en.txt")
+            if os.path.exists(localized):
+                return self._read_file(localized)
+        return self._read_file(
+            os.path.join(self.catalog_dir, category_id, f"{asana_name}.txt")
+        )
 
     @staticmethod
     def _read_file(path: str) -> str:
@@ -209,6 +297,7 @@ class AsanaService:
     def refresh_catalog_cache(self):
         """Invalidate cached category listing after filesystem changes."""
         self._categories_cache = None
+        self._en_names_cache = None
 
     def _find_category(self, asana_name: str) -> Optional[str]:
         categories = self._get_categories()
