@@ -29,6 +29,7 @@ from app.services.email_service import (
     send_password_reset_email_async,
 )
 from app.services.google import decode_google_id_token
+from app.services.asana_service import normalize_lang
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -509,6 +510,7 @@ async def verify_telegram_code(
 @router.post("/telegram", response_model=TokenResponse)
 async def telegram_login(body: TelegramLoginRequest, db: AsyncSession = Depends(get_db)):
     """Direct telegram login (legacy)."""
+    lang = normalize_lang(body.language or "ru")
     result = await db.execute(select(User).where(User.telegram_id == body.telegram_id))
     user = result.scalar_one_or_none()
 
@@ -517,6 +519,9 @@ async def telegram_login(body: TelegramLoginRequest, db: AsyncSession = Depends(
             user.name = body.name
         if body.username and not user.username:
             user.username = body.username
+        # Язык таймер-бота задаём ТОЛЬКО при первом контакте (не перезаписываем ручной выбор)
+        if not user.timer_language:
+            user.timer_language = lang
         await db.commit()
         await db.refresh(user)
     else:
@@ -524,6 +529,8 @@ async def telegram_login(body: TelegramLoginRequest, db: AsyncSession = Depends(
             telegram_id=body.telegram_id,
             name=body.name,
             username=body.username,
+            language=lang,
+            timer_language=lang,
         )
         db.add(user)
         await db.commit()
@@ -533,8 +540,43 @@ async def telegram_login(body: TelegramLoginRequest, db: AsyncSession = Depends(
     token = create_access_token(user.id)
     return TokenResponse(
         access_token=token,
-        user={"id": user.id, "email": user.email, "name": user.name, "telegram_id": user.telegram_id},
+        user={"id": user.id, "email": user.email, "name": user.name, "telegram_id": user.telegram_id,
+              "language": user.language, "timer_language": user.timer_language},
     )
+
+
+class TimerLanguageRequest(BaseModel):
+    language: str = "ru"
+
+
+@router.get("/telegram/{telegram_id}/language")
+async def get_timer_language(
+    telegram_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Язык таймер-бота пользователя: {"language": "ru"|"en"}."""
+    result = await db.execute(select(User).where(User.telegram_id == telegram_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"language": normalize_lang(user.timer_language)}
+
+
+@router.put("/telegram/{telegram_id}/language")
+async def set_timer_language(
+    telegram_id: int,
+    body: TimerLanguageRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Сменить язык таймер-бота для пользователя."""
+    result = await db.execute(select(User).where(User.telegram_id == telegram_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.timer_language = normalize_lang(body.language)
+    user.updated_at = datetime.utcnow()
+    await db.commit()
+    return {"language": normalize_lang(user.timer_language)}
 
 
 @router.get("/me")

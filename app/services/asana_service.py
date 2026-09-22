@@ -41,6 +41,13 @@ NAME_RU_OVERRIDES = {
 }
 
 
+def normalize_lang(lang: Optional[str]) -> str:
+    """Приводит значение к 'ru'|'en' (все не-'en' считаются 'ru')."""
+    if lang and str(lang).lower().startswith('en'):
+        return 'en'
+    return 'ru'
+
+
 def resolve_lang(lang: Optional[str], accept_language: Optional[str] = None) -> str:
     """Resolve the content language from an explicit ?lang= or the Accept-Language header."""
     if lang:

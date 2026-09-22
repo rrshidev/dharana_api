@@ -33,6 +33,9 @@ class User(Base):
     # Язык интерфейса пользователя (bot/app): "ru" | "en"
     language = Column(String(5), nullable=False, default="ru", server_default="ru")
 
+    # Отдельная ячейка языка для таймер-бота (@timerasana_bot): "ru" | "en"
+    timer_language = Column(String(5), nullable=False, default="ru", server_default="ru")
+
     # Статистика (боти + приложение)
     total_practices = Column(Integer, default=0)
     streak_days = Column(Integer, default=0)
