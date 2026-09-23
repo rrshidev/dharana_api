@@ -97,6 +97,7 @@ class PracticeSession(Base):
     sequence_id = Column(Integer, ForeignKey("app_sequences.id"), nullable=True)
 
     status = Column(String(20), default="active")  # active, completed, cancelled
+    practice_type = Column(String(16), nullable=False, default="asana", server_default="asana")  # asana, meditation, pranayama
     asanas_practiced = Column(JSON, default=list)
     total_duration_seconds = Column(Integer, default=0)
     asana_durations = Column(JSON, default=dict)  # {asana_name: seconds}

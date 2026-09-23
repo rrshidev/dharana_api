@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     ADMIN_TELEGRAM_ID: str = ""
     BOT_TOKEN: str = ""
     BOT_ADMIN_KEY: str = ""
+    TIMER_BOT_KEY: str = ""
 
     # Проверка доставляемости почты (DNS MX) при регистрации. Отключать
     # только в тестах/изолированных средах без внешнего DNS.
