@@ -1,4 +1,4 @@
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel
@@ -214,6 +214,10 @@ async def record_timer_practice(
 
     started = body.started_at or datetime.utcnow()
     completed = body.completed_at or datetime.utcnow()
+    if started.tzinfo is not None:
+        started = started.astimezone(timezone.utc).replace(tzinfo=None)
+    if completed.tzinfo is not None:
+        completed = completed.astimezone(timezone.utc).replace(tzinfo=None)
     duration = max(body.total_duration_seconds, 0)
 
     session = PracticeSession(

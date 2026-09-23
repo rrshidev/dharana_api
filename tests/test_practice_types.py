@@ -136,6 +136,34 @@ async def test_timer_record_missing_user(client, monkeypatch):
     assert r.status_code == 404
 
 
+async def test_timer_record_accepts_offset_aware_iso(client, monkeypatch):
+    """Бот шлёт ISO 8601 с Z — должен ложиться в naive UTC-колонку Postgres."""
+    monkeypatch.setattr(settings, "TIMER_BOT_KEY", "timer-test-key")
+    uid, _ = await _mk_user(telegram_id=777004)
+
+    r = await client.post(
+        "/api/v1/practice/timer",
+        headers={"X-Timer-Key": "timer-test-key"},
+        json={
+            "telegram_id": 777004,
+            "practice_type": "meditation",
+            "total_duration_seconds": 300,
+            "started_at": "2026-09-23T08:00:00Z",
+            "completed_at": "2026-09-23T08:05:00Z",
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    async with async_session() as db:
+        from sqlalchemy import select
+        s = (await db.execute(
+            select(PracticeSession).where(PracticeSession.user_id == uid)
+        )).scalars().one()
+        assert s.started_at.tzinfo is None
+        assert s.started_at.hour == 8
+        assert s.completed_at.hour == 8
+
+
 # ---------- practice_type в history ----------
 
 async def test_history_includes_practice_type(client):
