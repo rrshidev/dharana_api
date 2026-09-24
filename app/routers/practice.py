@@ -64,6 +64,7 @@ class TimerPracticeRecord(BaseModel):
     total_duration_seconds: int = 0
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    cycles: int = 0  # количество циклов/упражнений (асаны, пранаяма)
 
 
 @router.delete("/{session_id}")
@@ -225,6 +226,7 @@ async def record_timer_practice(
         practice_type=body.practice_type,
         status="completed",
         total_duration_seconds=duration,
+        cycles=max(body.cycles, 0),
         started_at=started,
         completed_at=completed,
     )
@@ -428,8 +430,11 @@ async def practice_stats_series(
         row = counts.setdefault(key, {"minutes": 0, "sessions": 0, "asanas": 0})
         row["minutes"] += s.total_duration_seconds // 60
         row["sessions"] += 1
-        if s.practice_type == "asana":
-            row["asanas"] += len(s.asanas_practiced or [])
+        if s.practice_type in ("asana", "pranayama"):
+            if s.cycles and s.cycles > 0:
+                row["asanas"] += s.cycles
+            elif s.practice_type == "asana":
+                row["asanas"] += len(s.asanas_practiced or [])
 
     days_out = []
     minutes = []

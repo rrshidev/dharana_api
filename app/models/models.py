@@ -102,6 +102,7 @@ class PracticeSession(Base):
     total_duration_seconds = Column(Integer, default=0)
     asana_durations = Column(JSON, default=dict)  # {asana_name: seconds}
     rest_seconds = Column(Integer, default=15)
+    cycles = Column(Integer, default=0)  # количество циклов/упражнений (таймер-боты)
 
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
