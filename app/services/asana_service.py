@@ -206,32 +206,101 @@ class AsanaService:
         name, cat_key = random.choice(all_names)
         return self.get_asana_detail(name, lang)
 
-    def get_basics(self) -> List[Dict]:
-        if not os.path.exists(self.basics_dir):
-            return []
-        items = []
-        for f in sorted(os.listdir(self.basics_dir)):
-            if f.endswith(".txt"):
-                name = f[:-4]
-                if name and name[0].isdigit():
-                    parts = name.split(".", 1)
-                    if len(parts) > 1:
-                        name = parts[1].strip()
-                items.append({"name": name, "content": self._read_file(os.path.join(self.basics_dir, f))})
-        return items
+    def get_basics(self, lang: Optional[str] = None) -> List[Dict]:
+        return self._list_theory_items(self.basics_dir, "media/basics", lang)
 
-    def get_steps(self) -> List[Dict]:
-        if not os.path.exists(self.steps_dir):
+    def get_steps(self, lang: Optional[str] = None) -> List[Dict]:
+        return self._list_theory_items(self.steps_dir, None, lang)
+
+    def _parse_theory_name(self, base_name: str) -> str:
+        """Убирает ведущий числовой префикс ('9.ЧАКРЫ' -> 'ЧАКРЫ')."""
+        name = base_name
+        if name and name[0].isdigit():
+            parts = name.split(".", 1)
+            if len(parts) > 1:
+                name = parts[1].strip()
+        return name
+
+    def _find_theory_file(self, directory: str, name: str, ext: str) -> Optional[str]:
+        """Возвращает реальное имя файла в каталоге, чьё распарсенное имя == name."""
+        if not os.path.exists(directory):
+            return None
+        if ext == ".txt":
+            candidates = (name + ".txt",)
+            # Файлы могут иметь числовой префикс: '9.ЧАКРЫ.txt'.
+            for f in sorted(os.listdir(directory)):
+                if f.endswith(".en.txt"):
+                    continue
+                if f.endswith(".txt") and self._parse_theory_name(f[:-4]) == name:
+                    candidates = candidates + (f,)
+        else:
+            candidates = tuple()
+            for f in sorted(os.listdir(directory)):
+                if f.endswith(ext) and self._parse_theory_name(f[: -len(ext)]) == name:
+                    candidates = candidates + (f,)
+        for f in candidates:
+            if os.path.exists(os.path.join(directory, f)):
+                return f
+        return None
+
+    def _theory_en_title(self, directory: str, name: str) -> Optional[str]:
+        """Первая строка <файл>.en.txt — локализованное название (для EN)."""
+        for f in sorted(os.listdir(directory)):
+            if f.endswith(".en.txt") and self._parse_theory_name(f[: -len(".en.txt")]) == name:
+                try:
+                    with open(os.path.join(directory, f), "r", encoding="utf-8") as fh:
+                        title = fh.readline().strip()
+                    note = title.find(" (")
+                    if note != -1:
+                        title = title[:note].strip()
+                    return title or None
+                except Exception as e:
+                    logger.error(f"Error reading {os.path.join(directory, f)}: {e}")
+                    return None
+        return None
+
+    def _read_theory_content(self, directory: str, name: str, lang: Optional[str]) -> str:
+        """Читает контент раздела: для en — .en.txt (если есть), иначе ru."""
+        if lang == "en":
+            en_file = self._find_theory_file(directory, name, ".txt")
+            if en_file:
+                en_path = os.path.join(directory, en_file[:-4] + ".en.txt")
+                if os.path.exists(en_path):
+                    return self._read_file(en_path)
+        ru_file = self._find_theory_file(directory, name, ".txt")
+        if ru_file:
+            return self._read_file(os.path.join(directory, ru_file))
+        return ""
+
+    def _theory_image_url(self, directory: str, name: str, media_prefix: Optional[str]) -> Optional[str]:
+        """URL картинки раздела (PNG), если существует."""
+        if not media_prefix:
+            return None
+        img_file = self._find_theory_file(directory, name, ".png")
+        if not img_file:
+            return None
+        return f"/api/v1/{media_prefix}/{img_file}"
+
+    def _list_theory_items(self, directory: str, media_prefix: Optional[str], lang: Optional[str]) -> List[Dict]:
+        """Список теоретических разделов (basics/steps) с локализацией."""
+        lang = normalize_lang(lang)
+        if not os.path.exists(directory):
             return []
+        seen = set()
         items = []
-        for f in sorted(os.listdir(self.steps_dir)):
-            if f.endswith(".txt"):
-                name = f[:-4]
-                if name and name[0].isdigit():
-                    parts = name.split(".", 1)
-                    if len(parts) > 1:
-                        name = parts[1].strip()
-                items.append({"name": name, "content": self._read_file(os.path.join(self.steps_dir, f))})
+        for f in sorted(os.listdir(directory)):
+            if not f.endswith(".txt") or f.endswith(".en.txt"):
+                continue
+            name = self._parse_theory_name(f[: -4])
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            items.append({
+                "name": name,
+                "name_en": self._theory_en_title(directory, name),
+                "content": self._read_theory_content(directory, name, lang),
+                "image_url": self._theory_image_url(directory, name, media_prefix),
+            })
         return items
 
     def _build_asana_summary(self, name: str, category_id: str) -> Dict:
