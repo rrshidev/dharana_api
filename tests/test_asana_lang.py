@@ -57,6 +57,30 @@ def test_en_description_and_no_phantom(catalog):
     assert all("name_ru" in s for s in summaries)
 
 
+def test_photo_prefers_jpg_then_jpeg_then_png():
+    base = os.path.join(settings.BOT_DATA_DIR, "catalog", "stay+")
+    os.makedirs(base, exist_ok=True)
+    name = "Фототестасана"
+    with open(os.path.join(base, name + ".txt"), "w", encoding="utf-8") as f:
+        f.write("RU")
+    asana_service.refresh_catalog_cache()
+    try:
+        detail = asana_service.get_asana_detail(name, "ru")
+        assert detail["image_url"] is None
+
+        for ext in (".png", ".jpeg", ".jpg"):
+            with open(os.path.join(base, name + ext), "wb") as f:
+                f.write(b"\x89PNG\r\n\x1a\n" if ext == ".png" else b"\xff\xd8\xff\xe0")
+            detail = asana_service.get_asana_detail(name, "ru")
+            assert detail["image_url"] == f"/api/v1/media/photos/stay+/{name}{ext}", ext
+    finally:
+        for ext in (".txt", ".en.txt", ".png", ".jpeg", ".jpg"):
+            p = os.path.join(base, name + ext)
+            if os.path.exists(p):
+                os.remove(p)
+        asana_service.refresh_catalog_cache()
+
+
 def test_name_ru_overrides():
     assert NAME_RU_OVERRIDES["Маричасана 3"] == "Маричиасана 3"
     assert NAME_RU_OVERRIDES["Маричасана 4"] == "Маричиасана 4"

@@ -80,7 +80,7 @@ async def admin_bot_stats(
         select(func.count(PracticeSession.id)).where(PracticeSession.status == "completed")
     )).scalar()
 
-    today = date.today()
+    today = datetime.utcnow().date()
     week_ago = today - timedelta(days=7)
     month_ago = today - timedelta(days=30)
 

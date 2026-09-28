@@ -356,7 +356,7 @@ async def practice_stats(
             by_type[s.practice_type]["minutes"] += s.total_duration_seconds // 60
             by_type[s.practice_type]["sessions"] += 1
 
-    today = date.today()
+    today = datetime.utcnow().date()
     current_streak = 0
     check_date = today
     practiced_dates = set(s.started_at.date() for s in sessions if s.started_at)
@@ -405,9 +405,9 @@ async def practice_stats_series(
     if practice_type not in ("all", *PRACTICE_TYPES):
         raise HTTPException(status_code=422, detail="INVALID_PRACTICE_TYPE")
 
-    start_date = date.today() - timedelta(days=days - 1)
+    start_date = datetime.utcnow().date() - timedelta(days=days - 1)
     start_dt = datetime.combine(start_date, datetime.min.time())
-    end_dt = datetime.combine(date.today() + timedelta(days=1), datetime.min.time())
+    end_dt = datetime.combine(datetime.utcnow().date() + timedelta(days=1), datetime.min.time())
 
     stmt = select(PracticeSession).where(
         PracticeSession.user_id == user.id,

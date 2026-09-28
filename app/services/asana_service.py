@@ -173,7 +173,7 @@ class AsanaService:
         description = self._read_description(category_id, asana_name, lang)
 
         image_filename = None
-        for ext in (".jpg", ".png"):
+        for ext in (".jpg", ".jpeg", ".png"):
             path = os.path.join(self.catalog_dir, category_id, f"{asana_name}{ext}")
             if os.path.exists(path):
                 image_filename = f"{category_id}/{asana_name}{ext}"

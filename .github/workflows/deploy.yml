@@ -47,7 +47,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Package sources
-        run: tar -czf dharana-api.tar.gz app migrations alembic.ini Dockerfile requirements.txt pytest.ini
+        run: tar -czf dharana-api.tar.gz app migrations alembic.ini Dockerfile requirements.txt pytest.ini tools
 
       - name: Copy to server
         uses: appleboy/scp-action@v0.1.7
@@ -75,3 +75,6 @@ jobs:
             sudo docker compose run --rm --no-deps dharana-api alembic upgrade head
             sleep 8
             curl -fsS http://localhost:8000/api/v1/health || true
+            set +e
+            sudo python3 /opt/dharana/dharana-api/tools/catalog_check.py
+            echo "catalog_check_exit=$?"

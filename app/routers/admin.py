@@ -155,7 +155,7 @@ async def admin_stats(
         select(func.count(PracticeSession.id)).where(PracticeSession.status == "completed")
     )).scalar()
 
-    today = date.today()
+    today = datetime.utcnow().date()
     week_ago = today - timedelta(days=7)
     month_ago = today - timedelta(days=30)
 
@@ -278,7 +278,7 @@ async def admin_stats_series(
         num_days = (end - start).days + 1
         start_date = start
     else:
-        start_date = date.today() - timedelta(days=days - 1)
+        start_date = datetime.utcnow().date() - timedelta(days=days - 1)
         num_days = days
     start_dt = datetime.combine(start_date, datetime.min.time())
     end_dt = datetime.combine(start_date + timedelta(days=num_days), datetime.min.time())
