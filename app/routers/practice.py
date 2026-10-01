@@ -32,6 +32,53 @@ FREE_REPEATABLE_LIMIT = 3
 DAILY_GENERATION_LIMIT = 1
 
 
+def compute_practice_stats(sessions) -> dict:
+    """Единая агрегация статистики практик пользователя.
+
+    Используется и профильным /practice/stats (JWT), и ботовым
+    /practice/timer/stats (X-Timer-Key) — чтобы бот и приложение
+    показывали одни и те же числа.
+
+    `sessions` — завершённые PracticeSession (status == "completed").
+    """
+    sessions = list(sessions)
+    total_minutes = sum(s.total_duration_seconds for s in sessions) // 60
+    total_days = len(set(s.started_at.date() for s in sessions if s.started_at))
+    total_asanas = sum(len(s.asanas_practiced) for s in sessions if s.practice_type == "asana")
+
+    by_type = {t: {"minutes": 0, "sessions": 0} for t in PRACTICE_TYPES}
+    for s in sessions:
+        if s.practice_type in by_type:
+            by_type[s.practice_type]["minutes"] += s.total_duration_seconds // 60
+            by_type[s.practice_type]["sessions"] += 1
+
+    today = datetime.utcnow().date()
+    current_streak = 0
+    check_date = today
+    practiced_dates = set(s.started_at.date() for s in sessions if s.started_at)
+    while check_date in practiced_dates:
+        current_streak += 1
+        check_date -= timedelta(days=1)
+
+    favorite_asanas = {}
+    for s in sessions:
+        if s.practice_type != "asana":
+            continue
+        for name in s.asanas_practiced:
+            favorite_asanas[name] = favorite_asanas.get(name, 0) + 1
+    top_asanas = sorted(favorite_asanas.items(), key=lambda x: -x[1])[:5]
+
+    return {
+        "total_minutes": total_minutes,
+        "total_days": total_days,
+        "total_sessions": len(sessions),
+        "total_asanas_practiced": total_asanas,
+        "current_streak": current_streak,
+        "favorite_asanas": [{"name": n, "count": c} for n, c in top_asanas],
+        "by_type": by_type,
+    }
+
+
 class GenerateSequenceRequest(BaseModel):
     difficulty: str = "beginner"
     duration_minutes: int = 30
@@ -255,6 +302,35 @@ async def record_timer_practice(
     }
 
 
+@router.get("/timer/stats")
+async def timer_practice_stats(
+    telegram_id: int,
+    _: bool = Depends(require_timer_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Сводная статистика практик пользователя для ботов (X-Timer-Key).
+
+    Бот знает telegram_id пользователя, но не имеет JWT. Ответ — ровно те же
+    агрегаты, что отдаёт профильному /practice/stats, плюс last_practice_at.
+    """
+    result = await db.execute(select(User).where(User.telegram_id == telegram_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    sessions = (await db.execute(
+        select(PracticeSession).where(
+            PracticeSession.user_id == user.id,
+            PracticeSession.status == "completed",
+        )
+    )).scalars().all()
+
+    return {
+        **compute_practice_stats(sessions),
+        "last_practice_at": user.last_practice_at.isoformat() if user.last_practice_at else None,
+    }
+
+
 @router.post("/generate")
 async def generate_sequence(
     body: GenerateSequenceRequest,
@@ -346,42 +422,7 @@ async def practice_stats(
     )
     sessions = result.scalars().all()
 
-    total_minutes = sum(s.total_duration_seconds for s in sessions) // 60
-    total_days = len(set(s.started_at.date() for s in sessions if s.started_at))
-    total_asanas = sum(len(s.asanas_practiced) for s in sessions if s.practice_type == "asana")
-
-    by_type = {t: {"minutes": 0, "sessions": 0} for t in PRACTICE_TYPES}
-    for s in sessions:
-        if s.practice_type in by_type:
-            by_type[s.practice_type]["minutes"] += s.total_duration_seconds // 60
-            by_type[s.practice_type]["sessions"] += 1
-
-    today = datetime.utcnow().date()
-    current_streak = 0
-    check_date = today
-    practiced_dates = set(s.started_at.date() for s in sessions if s.started_at)
-    while check_date in practiced_dates:
-        current_streak += 1
-        from datetime import timedelta
-        check_date -= timedelta(days=1)
-
-    favorite_asanas = {}
-    for s in sessions:
-        if s.practice_type != "asana":
-            continue
-        for name in s.asanas_practiced:
-            favorite_asanas[name] = favorite_asanas.get(name, 0) + 1
-    top_asanas = sorted(favorite_asanas.items(), key=lambda x: -x[1])[:5]
-
-    return {
-        "total_minutes": total_minutes,
-        "total_days": total_days,
-        "total_sessions": len(sessions),
-        "total_asanas_practiced": total_asanas,
-        "current_streak": current_streak,
-        "favorite_asanas": [{"name": n, "count": c} for n, c in top_asanas],
-        "by_type": by_type,
-    }
+    return compute_practice_stats(sessions)
 
 
 @router.get("/stats/series")
