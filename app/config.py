@@ -44,6 +44,20 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_ANDROID_CLIENT_ID: str = ""
 
+    # VK ID (https://id.vk.com) — Client ID/Secret из VK ID Console.
+    # Отдельного OAuth у MAX нет: кнопка «через MAX» использует этот же вход.
+    VK_CLIENT_ID: str = ""
+    VK_CLIENT_SECRET: str = ""
+
+    # Яндекс OAuth (https://oauth.yandex.ru) — вход по Яндекс ID.
+    YANDEX_CLIENT_ID: str = ""
+    YANDEX_CLIENT_SECRET: str = ""
+
+    # Базовый URL сайта: из него бэкенд сам собирает redirect_uri для обмена
+    # кода на токен (VK/Яндекс требуют точного совпадения с консолью провайдера),
+    # поэтому клиентский redirect_uri не принимаем.
+    OAUTH_REDIRECT_BASE_URL: str = "https://dharana.ru"
+
     @property
     def cors_origins_list(self) -> List[str]:
         return json.loads(self.CORS_ORIGINS)

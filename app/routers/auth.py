@@ -29,6 +29,8 @@ from app.services.email_service import (
     send_password_reset_email_async,
 )
 from app.services.google import decode_google_id_token
+from app.services.vk import login_with_code as vk_login_with_code
+from app.services.yandex import login_with_code as yandex_login_with_code
 from app.services.asana_service import normalize_lang
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -87,6 +89,11 @@ class GoogleLoginRequest(BaseModel):
     id_token: str
     name: str | None = None
     avatar_url: str | None = None
+
+
+class OAuthCodeRequest(BaseModel):
+    """Authorization code от VK ID / Яндекса (редирект-флоу на вебе)."""
+    code: str
 
 
 class PasswordResetRequest(BaseModel):
@@ -189,6 +196,73 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     )
 
 
+async def _finish_social_login(
+    db: AsyncSession,
+    *,
+    provider: str,
+    provider_field: str,
+    provider_id: str | None,
+    email: str | None,
+    name: str | None,
+    avatar_url: str | None,
+    error_detail: str,
+) -> TokenResponse:
+    """Общая часть входа через внешний провайдер (Google / VK ID / Яндекс).
+
+    Идентификатор провайдера — главный ключ поиска. Если юзер уже есть по
+    совпавшей почте — просто привязываем provider_id (провайдер почту проверил).
+    """
+    if not provider_id:
+        raise HTTPException(status_code=401, detail=error_detail)
+
+    result = await db.execute(select(User).where(getattr(User, provider_field) == provider_id))
+    user = result.scalar_one_or_none()
+
+    if user is None and email:
+        email_result = await db.execute(select(User).where(User.email == email))
+        user = email_result.scalar_one_or_none()
+        if user:
+            setattr(user, provider_field, provider_id)
+
+    is_new = False
+    if user is None:
+        fallback_name = email.split("@", 1)[0] if email else f"user_{provider_id[-6:]}"
+        user = User(
+            email=email,
+            name=name or fallback_name,
+            avatar_url=avatar_url,
+            email_verified=True if email else False,  # почту уже проверил провайдер
+        )
+        setattr(user, provider_field, provider_id)
+        db.add(user)
+        is_new = True
+    else:
+        # Обновляем недостающие данные
+        if name and not user.name:
+            user.name = name
+        if avatar_url and not user.avatar_url:
+            user.avatar_url = avatar_url
+        if email and not user.email:
+            user.email = email
+        if email and not user.email_verified:
+            user.email_verified = True
+
+    await db.commit()
+    await db.refresh(user)
+
+    if is_new:
+        await notify_new_user(user.name or user.email or f"User #{user.id}", provider)
+
+    token = create_access_token(user.id)
+    payload = {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+    }
+    payload[provider_field] = getattr(user, provider_field)
+    return TokenResponse(access_token=token, user=payload)
+
+
 @router.post("/google", response_model=TokenResponse)
 async def google_login(body: GoogleLoginRequest, db: AsyncSession = Depends(get_db)):
     """Google Sign-In: принимает id_token от Google, валидирует подпись/audience,
@@ -205,61 +279,73 @@ async def google_login(body: GoogleLoginRequest, db: AsyncSession = Depends(get_
     if claims is None:
         raise HTTPException(status_code=401, detail="INVALID_GOOGLE_TOKEN")
 
-    sub = claims.get("sub")
-    email = (claims.get("email") or "").strip().casefold() or None
-    name = claims.get("name") or body.name
-    picture = claims.get("picture") or body.avatar_url
+    return await _finish_social_login(
+        db,
+        provider="google",
+        provider_field="google_id",
+        provider_id=claims.get("sub"),
+        email=(claims.get("email") or "").strip().casefold() or None,
+        name=claims.get("name") or body.name,
+        avatar_url=claims.get("picture") or body.avatar_url,
+        error_detail="INVALID_GOOGLE_TOKEN",
+    )
 
-    if not sub:
-        raise HTTPException(status_code=401, detail="INVALID_GOOGLE_TOKEN")
 
-    result = await db.execute(select(User).where(User.google_id == sub))
-    user = result.scalar_one_or_none()
+@router.post("/vk", response_model=TokenResponse)
+async def vk_login(body: OAuthCodeRequest, db: AsyncSession = Depends(get_db)):
+    """Вход по VK ID. Этим же флоу входит MAX: отдельного OAuth у MAX нет.
 
-    if user is None and email:
-        # Нет аккаунта по google_id, но есть по email — привязываем google_id (нужен токен Google, т.к. email подтверждён).
-        email_result = await db.execute(select(User).where(User.email == email))
-        user = email_result.scalar_one_or_none()
-        if user:
-            user.google_id = sub
+    Бэкенд сам обменивает код на токен (client_secret не уходит в браузер) и
+    берёт профиль через users.get, поэтому клиент присылает только код.
+    """
+    if not settings.VK_CLIENT_ID or not settings.VK_CLIENT_SECRET:
+        raise HTTPException(status_code=501, detail="VK_NOT_CONFIGURED")
 
-    is_new = False
-    if user is None:
-        user = User(
-            google_id=sub,
-            email=email,
-            name=name or (email.split("@", 1)[0] if email else f"user_{sub[-6:]}"),
-            avatar_url=picture,
-            email_verified=True if email else False,  # Google уже верифицировал почту
-        )
-        db.add(user)
-        is_new = True
-    else:
-        # Обновляем недостающие данные
-        if name and not user.name:
-            user.name = name
-        if picture and not user.avatar_url:
-            user.avatar_url = picture
-        if email and not user.email:
-            user.email = email
-        if email and not user.email_verified:
-            user.email_verified = True
+    profile = vk_login_with_code(
+        code=body.code,
+        redirect_uri=f"{settings.OAUTH_REDIRECT_BASE_URL.rstrip('/')}/api/auth/vk/callback",
+        client_id=settings.VK_CLIENT_ID,
+        client_secret=settings.VK_CLIENT_SECRET,
+    )
+    if profile is None:
+        raise HTTPException(status_code=401, detail="INVALID_VK_TOKEN")
 
-    await db.commit()
-    await db.refresh(user)
+    return await _finish_social_login(
+        db,
+        provider="vk",
+        provider_field="vk_id",
+        provider_id=profile["id"],
+        email=profile["email"],
+        name=profile["name"],
+        avatar_url=profile["avatar_url"],
+        error_detail="INVALID_VK_TOKEN",
+    )
 
-    if is_new:
-        await notify_new_user(user.name or user.email or f"User #{user.id}", "google")
 
-    token = create_access_token(user.id)
-    return TokenResponse(
-        access_token=token,
-        user={
-            "id": user.id,
-            "email": user.email,
-            "name": user.name,
-            "google_id": user.google_id,
-        },
+@router.post("/yandex", response_model=TokenResponse)
+async def yandex_login(body: OAuthCodeRequest, db: AsyncSession = Depends(get_db)):
+    """Вход по Яндекс ID: код → access_token → профиль на login.yandex.ru/info."""
+    if not settings.YANDEX_CLIENT_ID or not settings.YANDEX_CLIENT_SECRET:
+        raise HTTPException(status_code=501, detail="YANDEX_NOT_CONFIGURED")
+
+    profile = yandex_login_with_code(
+        code=body.code,
+        redirect_uri=f"{settings.OAUTH_REDIRECT_BASE_URL.rstrip('/')}/api/auth/yandex/callback",
+        client_id=settings.YANDEX_CLIENT_ID,
+        client_secret=settings.YANDEX_CLIENT_SECRET,
+    )
+    if profile is None:
+        raise HTTPException(status_code=401, detail="INVALID_YANDEX_TOKEN")
+
+    return await _finish_social_login(
+        db,
+        provider="yandex",
+        provider_field="yandex_id",
+        provider_id=profile["id"],
+        email=profile["email"],
+        name=profile["name"],
+        avatar_url=profile["avatar_url"],
+        error_detail="INVALID_YANDEX_TOKEN",
     )
 
 
