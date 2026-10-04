@@ -148,3 +148,40 @@ async def test_yandex_and_vk_are_separate_accounts(client, ya):
     assert rv.status_code == 200
     assert ry.status_code == 200
     assert rv.json()["user"]["id"] != ry.json()["user"]["id"]
+
+
+async def test_yandex_platform_client_uses_its_own_secret(client, ya):
+    """Код из приложения (у него в кабинете свой Client ID) обменивается
+    secret'ом именно этого клиента — иначе Яндекс отклоняет код."""
+    from unittest.mock import patch
+
+    android_id = "android-client-1"
+    with patch(
+        "app.routers.auth.settings.YANDEX_EXTRA_CLIENTS",
+        f"{android_id}:android-secret",
+    ):
+        r = await client.post(
+            "/api/v1/auth/yandex",
+            json={"code": "valid", "client_id": android_id},
+        )
+
+    assert r.status_code == 200
+    assert ya.call_args.kwargs["client_id"] == android_id
+    assert ya.call_args.kwargs["client_secret"] == "android-secret"
+
+
+async def test_yandex_unknown_platform_client_rejected(client, ya):
+    """Чужой client_id не даёт подсунуть свои credentials — 400."""
+    r = await client.post(
+        "/api/v1/auth/yandex",
+        json={"code": "valid", "client_id": "someone-elses-client"},
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "OAUTH_CLIENT_NOT_ALLOWED"
+    ya.assert_not_called()
+
+
+async def test_yandex_web_client_default_when_client_id_omitted(client, ya):
+    r = await client.post("/api/v1/auth/yandex", json={"code": "valid"})
+    assert r.status_code == 200
+    assert ya.call_args.kwargs["client_id"] == "ya-app-1"

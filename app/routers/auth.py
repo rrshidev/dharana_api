@@ -100,6 +100,10 @@ class OAuthCodeRequest(BaseModel):
     redirect_uri: str | None = None
     # PKCE (S256) — шлёт клиент, которому он был нужен (Яндекс не требует).
     code_verifier: str | None = None
+    # Какой OAuth-клиент выдал код. У Яндекса каждая платформа в кабинете имеет
+    # свои credentials (у Android-приложения — свои), а код можно обменять только
+    # secret'ом именно того клиента. Пусто = дефолтный (веб) клиент.
+    client_id: str | None = None
 
 
 class VKAccessTokenRequest(BaseModel):
@@ -327,6 +331,27 @@ def _oauth_redirect_uri(provider: str, requested: str | None) -> str:
     return requested
 
 
+def _yandex_client_credentials(requested: str | None) -> tuple[str, str]:
+    """Креденшелы Яндекса для обмена кода: веб-клиент или Android-приложение.
+
+    В кабинете Яндекса у каждой платформы свой Client ID и secret (в т.ч. у
+    добавленного нами Android-приложения), а код обменивается только secret'ом
+    того клиента, который его выдал. Дополнительные клиенты перечислены в
+    `YANDEX_EXTRA_CLIENTS` как `id:secret,id2:secret2`; клиент присылает в
+    запросе только публичный client_id, секрет остаётся на сервере.
+    """
+    if not requested or requested == settings.YANDEX_CLIENT_ID:
+        return settings.YANDEX_CLIENT_ID, settings.YANDEX_CLIENT_SECRET
+    for pair in settings.YANDEX_EXTRA_CLIENTS.split(","):
+        pair = pair.strip()
+        if not pair or ":" not in pair:
+            continue
+        extra_id, extra_secret = pair.split(":", 1)
+        if extra_id.strip() == requested:
+            return extra_id.strip(), extra_secret.strip()
+    raise HTTPException(status_code=400, detail="OAUTH_CLIENT_NOT_ALLOWED")
+
+
 @router.post("/vk", response_model=TokenResponse)
 async def vk_login(body: VKAccessTokenRequest, db: AsyncSession = Depends(get_db)):
     """Вход по VK ID.
@@ -360,14 +385,15 @@ async def vk_login(body: VKAccessTokenRequest, db: AsyncSession = Depends(get_db
 @router.post("/yandex", response_model=TokenResponse)
 async def yandex_login(body: OAuthCodeRequest, db: AsyncSession = Depends(get_db)):
     """Вход по Яндекс ID: код → access_token → профиль на login.yandex.ru/info."""
-    if not settings.YANDEX_CLIENT_ID or not settings.YANDEX_CLIENT_SECRET:
+    client_id, client_secret = _yandex_client_credentials(body.client_id)
+    if not client_id or not client_secret:
         raise HTTPException(status_code=501, detail="YANDEX_NOT_CONFIGURED")
 
     profile = yandex_login_with_code(
         code=body.code,
         redirect_uri=_oauth_redirect_uri("yandex", body.redirect_uri),
-        client_id=settings.YANDEX_CLIENT_ID,
-        client_secret=settings.YANDEX_CLIENT_SECRET,
+        client_id=client_id,
+        client_secret=client_secret,
     )
     if profile is None:
         raise HTTPException(status_code=401, detail="INVALID_YANDEX_TOKEN")

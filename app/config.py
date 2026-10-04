@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     # Яндекс OAuth (https://oauth.yandex.ru) — вход по Яндекс ID.
     YANDEX_CLIENT_ID: str = ""
     YANDEX_CLIENT_SECRET: str = ""
+    # Прочие клиенты Яндекса как `id:secret,id2:secret2`. Нужны, потому что в
+    # кабинете у каждой платформы свои credentials: код, выданный Android-клиенту,
+    # обменивается только его secret'ом.
+    YANDEX_EXTRA_CLIENTS: str = ""
 
     # Базовый URL сайта: из него бэкенд сам собирает redirect_uri для обмена
     # кода на токен (VK/Яндекс требуют точного совпадения с консолью провайдера).
