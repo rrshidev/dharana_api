@@ -29,20 +29,22 @@ def exchange_code(
     redirect_uri: str,
     client_id: str,
     client_secret: str,
+    code_verifier: Optional[str] = None,
 ) -> Optional[dict]:
     """Меняет authorization code на {access_token, user_id, email?}. None при ошибке."""
+    data = {
+        "grant_type": "authorization_code",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "code": code,
+        "redirect_uri": redirect_uri,
+    }
+    # PKCE обязателен у текущего VK ID: без него authorize отдаёт
+    # "code_challenge or code_challenge_method is invalid" (проверено 2026-10-04).
+    if code_verifier:
+        data["code_verifier"] = code_verifier
     try:
-        resp = httpx.post(
-            TOKEN_URL,
-            data={
-                "grant_type": "authorization_code",
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "code": code,
-                "redirect_uri": redirect_uri,
-            },
-            timeout=10.0,
-        )
+        resp = httpx.post(TOKEN_URL, data=data, timeout=10.0)
     except Exception as e:
         logger.warning(f"VK token request failed: {type(e).__name__}: {e}")
         return None
@@ -94,12 +96,16 @@ def login_with_code(
     redirect_uri: str,
     client_id: str,
     client_secret: str,
+    code_verifier: Optional[str] = None,
 ) -> Optional[dict]:
     """Полный флоу: code → access_token → профиль.
 
-    Возвращает {id, email, name, avatar_url} или None на любой неудаче.
+    code_verifier обязателен для VK ID (PKCE S256) — клиент присылает его
+    вместе с кодом.
+
+    Возвращает {id, email, name, avatar_url} или None на любом неудаче.
     """
-    token_data = exchange_code(code, redirect_uri, client_id, client_secret)
+    token_data = exchange_code(code, redirect_uri, client_id, client_secret, code_verifier)
     if token_data is None:
         return None
 

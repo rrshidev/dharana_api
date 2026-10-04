@@ -98,6 +98,9 @@ class OAuthCodeRequest(BaseModel):
     # потому что обмен кода на токен требует ТОЧНОГО redirect_uri из authorize-запроса.
     # Значение проверяется по allowlist (см. _oauth_redirect_uri).
     redirect_uri: str | None = None
+    # PKCE (S256) — обязателен для VK ID: клиент шлёт code_verifier, который
+    # соответствует code_challenge из authorize-запроса. Для Яндекса не нужен.
+    code_verifier: str | None = None
 
 
 class PasswordResetRequest(BaseModel):
@@ -330,6 +333,7 @@ async def vk_login(body: OAuthCodeRequest, db: AsyncSession = Depends(get_db)):
         redirect_uri=_oauth_redirect_uri("vk", body.redirect_uri),
         client_id=settings.VK_CLIENT_ID,
         client_secret=settings.VK_CLIENT_SECRET,
+        code_verifier=body.code_verifier,
     )
     if profile is None:
         raise HTTPException(status_code=401, detail="INVALID_VK_TOKEN")

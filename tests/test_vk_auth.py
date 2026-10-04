@@ -91,6 +91,67 @@ async def test_vk_client_redirect_uri_allowed(client, vk):
     assert vk.call_args.kwargs["redirect_uri"] == app_link
 
 
+async def test_vk_passes_code_verifier(client, vk):
+    """PKCE: verifier из клиента доходит до сервиса (VK ID требует S256)."""
+    r = await client.post(
+        "/api/v1/auth/vk",
+        json={"code": "valid", "code_verifier": "verifier-123"},
+    )
+    assert r.status_code == 200
+    assert vk.call_args.kwargs["code_verifier"] == "verifier-123"
+
+
+async def test_vk_code_verifier_optional(client, vk):
+    """Яндекс-подобные клиенты без PKCE не должны падать (None уходит дальше)."""
+    r = await client.post("/api/v1/auth/vk", json={"code": "valid"})
+    assert r.status_code == 200
+    assert vk.call_args.kwargs["code_verifier"] is None
+
+
+async def test_vk_token_request_includes_verifier():
+    """Сервис VK кладёт code_verifier в POST на oauth.vk.ru/access_token."""
+    from unittest.mock import MagicMock, patch
+
+    from app.services import vk as vk_service
+
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"access_token": "t", "user_id": 1}
+
+    with patch.object(vk_service.httpx, "post", return_value=response) as post:
+        data = vk_service.exchange_code(
+            code="c",
+            redirect_uri="https://dharana.ru/api/auth/vk/callback",
+            client_id="id",
+            client_secret="secret",
+            code_verifier="vrf",
+        )
+
+    assert data == {"access_token": "t", "user_id": 1}
+    assert post.call_args.kwargs["data"]["code_verifier"] == "vrf"
+    assert post.call_args.kwargs["data"]["grant_type"] == "authorization_code"
+    assert post.call_args.args[0] == "https://oauth.vk.ru/access_token"
+
+
+async def test_vk_token_request_without_verifier():
+    """Без verifier параметр не отправляется (Яндекс-сценарий / старый клиент)."""
+    from unittest.mock import MagicMock, patch
+
+    from app.services import vk as vk_service
+
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"access_token": "t", "user_id": 1}
+
+    with patch.object(vk_service.httpx, "post", return_value=response) as post:
+        vk_service.exchange_code(
+            code="c",
+            redirect_uri="https://dharana.ru/api/auth/vk/callback",
+            client_id="id",
+            client_secret="secret",
+        )
+
+    assert "code_verifier" not in post.call_args.kwargs["data"]
+
+
 async def test_vk_client_redirect_uri_rejected(client, vk):
     from unittest.mock import patch
 
