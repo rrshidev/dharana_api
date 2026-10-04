@@ -11,8 +11,13 @@ on:
 #   DHARANA_SSH_PORT   - SSH-порт (см. ~/.ssh/config, dharana_ai)
 #   DHARANA_SSH_USER   - пользователь (yogin_ai)
 #   DHARANA_SSH_KEY    - приватный ключ целиком (BEGIN/END RSA/ED25519 без пароля)
-# Деploy копирует только исходники (app, migrations, alembic.ini, Dockerfile, requirements, pytest.ini)
+# Deploy копирует только исходники (app, migrations, alembic.ini, Dockerfile, requirements, pytest.ini)
 # и НЕ трогает runtime-данные (/opt/dharana/data, /media, /uploads).
+
+# Тесты уже гейтят деплой; конкурентные пуши лучше выполнить по очереди.
+concurrency:
+  group: api-deploy
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -59,7 +64,9 @@ jobs:
           source: "dharana-api.tar.gz"
           target: "/tmp/dharana_deploy_${{ github.run_id }}"
 
-      - name: Extract, rebuild, restart, migrate, verify
+      # Порядок важен: сначала миграции на свежем образе, потом старт сервиса.
+      # Наоборот новый код успевал стартовать против старой схемы БД.
+      - name: Extract, migrate, rebuild, restart, verify
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DHARANA_SSH_HOST }}
@@ -71,10 +78,25 @@ jobs:
             cd /opt/dharana
             sudo tar -xzf /tmp/dharana_deploy_${{ github.run_id }}/dharana-api.tar.gz -C ./dharana-api
             sudo docker compose build dharana-api
-            sudo docker compose up -d dharana-api
             sudo docker compose run --rm --no-deps dharana-api alembic upgrade head
-            sleep 8
-            curl -fsS http://localhost:8000/api/v1/health || true
+            sudo docker compose up -d dharana-api
+            sleep 10
+
+            # Проверки БЕЗ `|| true`: раньше деплой проходил даже при мёртвом API.
+            set -e
+            curl -fsS http://localhost:8000/api/v1/health > /dev/null
+            curl -fsS -o /dev/null https://api.dharana.ru/api/v1/health
+
+            # Маршрут входа по Яндексу должен жить (422 на пустое тело = схема на месте).
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+              http://localhost:8000/api/v1/auth/yandex \
+              -H 'Content-Type: application/json' -d '{}')
+            if [ "$code" != "422" ]; then
+              echo "::error::POST /auth/yandex вернул $code вместо 422 — новый код не развернулся?"
+              exit 1
+            fi
+
             set +e
             sudo python3 /opt/dharana/dharana-api/tools/catalog_check.py
             echo "catalog_check_exit=$?"
+            echo "api deploy OK"
