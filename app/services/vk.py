@@ -30,8 +30,10 @@ USER_INFO_URL = "https://id.vk.ru/oauth2/user_info"
 def fetch_profile(access_token: str, client_id: str) -> Optional[dict]:
     """Профиль по access_token VK ID: {id, email, name, avatar_url}. None при ошибке.
 
-    Ответ VK ID — OIDC-подобный (`sub`, `name`/`given_name`, `picture`, `email`),
-    поэтому разбираем с запасными именами полей.
+    Ответ VK ID приходит вложенным в `user`
+    ({"user": {"user_id", "first_name", "last_name", "avatar"}}, проверено на проде
+    2026-10-04), поэтому сначала разворачиваем `user`, затем разбираем с запасными
+    именами полей (плоский OIDC-подобный вариант тоже принимаем).
     """
     try:
         resp = httpx.post(
@@ -58,25 +60,33 @@ def fetch_profile(access_token: str, client_id: str) -> Optional[dict]:
         logger.warning(f"VK user_info error response: {str(data)[:200]}")
         return None
 
-    provider_id = str(data.get("sub") or data.get("id") or data.get("user_id") or "").strip()
+    # Реальный ответ VK ID (схема зафиксирована на проде 2026-10-04 по логам) —
+    # вложенный в `user`: {"user": {"user_id", "first_name", "last_name", "avatar"}}.
+    # Плоский OIDC-подобный вариант (`sub`/`name`/`picture`) тоже принимаем.
+    nested = data.get("user")
+    payload = {**data, **nested} if isinstance(nested, dict) else data
+
+    provider_id = str(
+        payload.get("sub") or payload.get("id") or payload.get("user_id") or payload.get("uid") or ""
+    ).strip()
     if not provider_id:
         logger.warning(f"VK user_info without subject: {str(data)[:200]}")
         return None
 
-    name = (data.get("name") or "").strip()
+    name = (payload.get("name") or "").strip()
     if not name:
         parts = [
-            (data.get("given_name") or data.get("first_name") or "").strip(),
-            (data.get("family_name") or data.get("last_name") or "").strip(),
+            (payload.get("given_name") or payload.get("first_name") or "").strip(),
+            (payload.get("family_name") or payload.get("last_name") or "").strip(),
         ]
         name = " ".join(p for p in parts if p).strip()
 
-    email = str(data.get("email") or "").strip().casefold() or None
+    email = str(payload.get("email") or "").strip().casefold() or None
     avatar_url = (
-        data.get("picture")
-        or data.get("avatar")
-        or data.get("photo_200")
-        or data.get("default_avatar")
+        payload.get("picture")
+        or payload.get("avatar")
+        or payload.get("photo_200")
+        or payload.get("default_avatar")
         or None
     )
 

@@ -234,3 +234,54 @@ def test_user_info_http_error_is_none():
 
     with patch.object(vk_service.httpx, "post", return_value=response):
         assert vk_service.fetch_profile("tok", "id") is None
+
+def test_user_info_nested_user_shape():
+    """Реальный ответ VK ID: профиль вложен в `user` (прод-логи 2026-10-04)."""
+    from unittest.mock import MagicMock, patch
+
+    from app.services import vk as vk_service
+
+    response = MagicMock(status_code=200)
+    response.json.return_value = {
+        "user": {
+            "user_id": "1095679706",
+            "first_name": "Руслан",
+            "last_name": "Стёпин",
+            "avatar": "https://sun9-33.userapi.com/avatar.jpg",
+        }
+    }
+
+    with patch.object(vk_service.httpx, "post", return_value=response):
+        profile = vk_service.fetch_profile("tok", "54803294")
+
+    assert profile == {
+        "id": "1095679706",
+        "email": None,
+        "name": "Руслан Стёпин",
+        "avatar_url": "https://sun9-33.userapi.com/avatar.jpg",
+    }
+
+
+def test_user_info_nested_user_with_email():
+    """Вложенный `user` + запрошенный email."""
+    from unittest.mock import MagicMock, patch
+
+    from app.services import vk as vk_service
+
+    response = MagicMock(status_code=200)
+    response.json.return_value = {
+        "user": {
+            "user_id": "42",
+            "first_name": "Иван",
+            "last_name": "Петров",
+            "avatar": "https://vk.com/a.jpg",
+            "email": "Ivan@Mail.RU",
+        }
+    }
+
+    with patch.object(vk_service.httpx, "post", return_value=response):
+        profile = vk_service.fetch_profile("tok", "id")
+
+    assert profile["id"] == "42"
+    assert profile["email"] == "ivan@mail.ru"
+    assert profile["name"] == "Иван Петров"
