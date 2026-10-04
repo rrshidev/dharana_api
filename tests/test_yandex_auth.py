@@ -141,9 +141,8 @@ async def test_yandex_and_vk_are_separate_accounts(client, ya):
         "avatar_url": None,
     }
     with patch("app.routers.auth.settings.VK_CLIENT_ID", "vk-app-1"), \
-         patch("app.routers.auth.settings.VK_CLIENT_SECRET", "vk-secret"), \
-         patch("app.routers.auth.vk_login_with_code", return_value=vk_profile):
-        rv = await client.post("/api/v1/auth/vk", json={"code": "valid"})
+         patch("app.routers.auth.vk_login_with_access_token", return_value=vk_profile):
+        rv = await client.post("/api/v1/auth/vk", json={"access_token": "tok"})
         ry = await client.post("/api/v1/auth/yandex", json={"code": "valid"})
 
     assert rv.status_code == 200

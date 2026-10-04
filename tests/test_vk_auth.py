@@ -1,4 +1,8 @@
-"""Вход по VK ID (POST /auth/vk) — тем же флою входит MAX."""
+"""Вход по VK ID (POST /auth/vk) — access_token из официального виджета OneTap.
+
+Схема VK ID (2026-10-04): код на токен меняет браузер (`VKID.Auth.exchangeCode`),
+бэкенд проверяет access_token через /oauth2/user_info и выдаёт свой JWT.
+"""
 
 import pytest
 
@@ -23,7 +27,7 @@ async def client():
 
 @pytest.fixture
 def vk():
-    """Включаем VK_CLIENT_ID/SECRET и мокаем обмен кода на токен + профиль."""
+    """Включаем VK_CLIENT_ID и мокаем проверку access_token -> профиль."""
     from unittest.mock import patch
 
     profile = {
@@ -33,140 +37,51 @@ def vk():
         "avatar_url": "https://sun9-1.userapi.com/vk.jpg",
     }
     with patch("app.routers.auth.settings.VK_CLIENT_ID", "vk-app-1"), \
-         patch("app.routers.auth.settings.VK_CLIENT_SECRET", "vk-secret"), \
-         patch("app.routers.auth.vk_login_with_code", return_value=profile) as mock_login:
+         patch("app.routers.auth.vk_login_with_access_token", return_value=profile) as mock_login:
         yield mock_login
 
 
 async def test_vk_not_configured(client):
     from unittest.mock import patch
 
-    with patch("app.routers.auth.settings.VK_CLIENT_ID", ""), \
-         patch("app.routers.auth.settings.VK_CLIENT_SECRET", ""):
-        r = await client.post("/api/v1/auth/vk", json={"code": "any"})
-        assert r.status_code == 501
-        assert r.json()["detail"] == "VK_NOT_CONFIGURED"
+    with patch("app.routers.auth.settings.VK_CLIENT_ID", ""):
+        r = await client.post("/api/v1/auth/vk", json={"access_token": "tok"})
+    assert r.status_code == 501
+    assert r.json()["detail"] == "VK_NOT_CONFIGURED"
 
 
-async def test_vk_secret_only_not_configured(client):
+async def test_vk_requires_client_secret(client, vk):
+    """Client secret больше не нужен: вход идёт по access_token."""
     from unittest.mock import patch
 
-    with patch("app.routers.auth.settings.VK_CLIENT_ID", "vk-app-1"), \
-         patch("app.routers.auth.settings.VK_CLIENT_SECRET", ""):
-        r = await client.post("/api/v1/auth/vk", json={"code": "any"})
-        assert r.status_code == 501
-        assert r.json()["detail"] == "VK_NOT_CONFIGURED"
+    with patch("app.routers.auth.settings.VK_CLIENT_SECRET", ""):
+        r = await client.post("/api/v1/auth/vk", json={"access_token": "tok"})
+    assert r.status_code == 200
 
 
-async def test_vk_invalid_code(client, vk):
+async def test_vk_empty_token_rejected(client, vk):
+    r = await client.post("/api/v1/auth/vk", json={"access_token": ""})
+    assert r.status_code == 422
+    vk.assert_not_called()
+
+
+async def test_vk_invalid_token(client, vk):
     vk.return_value = None
-    r = await client.post("/api/v1/auth/vk", json={"code": "garbage"})
+    r = await client.post("/api/v1/auth/vk", json={"access_token": "garbage"})
     assert r.status_code == 401
     assert r.json()["detail"] == "INVALID_VK_TOKEN"
 
 
-async def test_vk_redirect_uri_built_from_config(client, vk):
-    from unittest.mock import patch
-
-    with patch("app.routers.auth.settings.OAUTH_REDIRECT_BASE_URL", "https://dharana.ru/"):
-        r = await client.post("/api/v1/auth/vk", json={"code": "valid"})
+async def test_vk_passes_token_and_client_id(client, vk):
+    r = await client.post("/api/v1/auth/vk", json={"access_token": "vk-token-1"})
     assert r.status_code == 200
     kwargs = vk.call_args.kwargs
-    # redirect_uri собирает сервер, из клиента не берём (точное совпадение в консоли VK).
-    assert kwargs["redirect_uri"] == "https://dharana.ru/api/auth/vk/callback"
-    assert kwargs["code"] == "valid"
-
-
-async def test_vk_client_redirect_uri_allowed(client, vk):
-    """Приложение Android присылает свой колбэк (App Link) — он в allowlist."""
-    from unittest.mock import patch
-
-    app_link = "https://dharana.ru/app/auth/vk/callback"
-    with patch("app.routers.auth.settings.VK_ALLOWED_REDIRECT_URIS", app_link):
-        r = await client.post(
-            "/api/v1/auth/vk",
-            json={"code": "valid", "redirect_uri": app_link},
-        )
-    assert r.status_code == 200
-    assert vk.call_args.kwargs["redirect_uri"] == app_link
-
-
-async def test_vk_passes_code_verifier(client, vk):
-    """PKCE: verifier из клиента доходит до сервиса (VK ID требует S256)."""
-    r = await client.post(
-        "/api/v1/auth/vk",
-        json={"code": "valid", "code_verifier": "verifier-123"},
-    )
-    assert r.status_code == 200
-    assert vk.call_args.kwargs["code_verifier"] == "verifier-123"
-
-
-async def test_vk_code_verifier_optional(client, vk):
-    """Яндекс-подобные клиенты без PKCE не должны падать (None уходит дальше)."""
-    r = await client.post("/api/v1/auth/vk", json={"code": "valid"})
-    assert r.status_code == 200
-    assert vk.call_args.kwargs["code_verifier"] is None
-
-
-async def test_vk_token_request_includes_verifier():
-    """Сервис VK кладёт code_verifier в POST на oauth.vk.ru/access_token."""
-    from unittest.mock import MagicMock, patch
-
-    from app.services import vk as vk_service
-
-    response = MagicMock(status_code=200)
-    response.json.return_value = {"access_token": "t", "user_id": 1}
-
-    with patch.object(vk_service.httpx, "post", return_value=response) as post:
-        data = vk_service.exchange_code(
-            code="c",
-            redirect_uri="https://dharana.ru/api/auth/vk/callback",
-            client_id="id",
-            client_secret="secret",
-            code_verifier="vrf",
-        )
-
-    assert data == {"access_token": "t", "user_id": 1}
-    assert post.call_args.kwargs["data"]["code_verifier"] == "vrf"
-    assert post.call_args.kwargs["data"]["grant_type"] == "authorization_code"
-    assert post.call_args.args[0] == "https://oauth.vk.ru/access_token"
-
-
-async def test_vk_token_request_without_verifier():
-    """Без verifier параметр не отправляется (Яндекс-сценарий / старый клиент)."""
-    from unittest.mock import MagicMock, patch
-
-    from app.services import vk as vk_service
-
-    response = MagicMock(status_code=200)
-    response.json.return_value = {"access_token": "t", "user_id": 1}
-
-    with patch.object(vk_service.httpx, "post", return_value=response) as post:
-        vk_service.exchange_code(
-            code="c",
-            redirect_uri="https://dharana.ru/api/auth/vk/callback",
-            client_id="id",
-            client_secret="secret",
-        )
-
-    assert "code_verifier" not in post.call_args.kwargs["data"]
-
-
-async def test_vk_client_redirect_uri_rejected(client, vk):
-    from unittest.mock import patch
-
-    with patch("app.routers.auth.settings.VK_ALLOWED_REDIRECT_URIS", ""):
-        r = await client.post(
-            "/api/v1/auth/vk",
-            json={"code": "valid", "redirect_uri": "https://evil.example/steal"},
-        )
-    assert r.status_code == 400
-    assert r.json()["detail"] == "OAUTH_REDIRECT_NOT_ALLOWED"
-    vk.assert_not_called()
+    assert kwargs["access_token"] == "vk-token-1"
+    assert kwargs["client_id"] == "vk-app-1"
 
 
 async def test_vk_new_user(client, vk):
-    r = await client.post("/api/v1/auth/vk", json={"code": "valid"})
+    r = await client.post("/api/v1/auth/vk", json={"access_token": "tok"})
     assert r.status_code == 200
     data = r.json()
     assert data["access_token"]
@@ -182,22 +97,13 @@ async def test_vk_new_user(client, vk):
 
 
 async def test_vk_same_user_second_login(client, vk):
-    r1 = await client.post("/api/v1/auth/vk", json={"code": "valid"})
+    r1 = await client.post("/api/v1/auth/vk", json={"access_token": "tok"})
     uid1 = r1.json()["user"]["id"]
 
-    r2 = await client.post("/api/v1/auth/vk", json={"code": "valid"})
+    r2 = await client.post("/api/v1/auth/vk", json={"access_token": "tok"})
     assert r2.status_code == 200
     assert r2.json()["user"]["id"] == uid1
     assert r2.json()["user"]["vk_id"] == "vk123456789"
-
-
-async def test_vk_max_uses_same_identity(client, vk):
-    """MAX — тот же VK ID: вход с MAX-подписью не плодит второго юзера."""
-    r = await client.post("/api/v1/auth/vk", json={"code": "valid"})
-    uid = r.json()["user"]["id"]
-
-    r_max = await client.post("/api/v1/auth/vk", json={"code": "valid"})
-    assert r_max.json()["user"]["id"] == uid
 
 
 async def test_vk_links_existing_email_user(client, vk):
@@ -208,7 +114,7 @@ async def test_vk_links_existing_email_user(client, vk):
     assert r.status_code == 201
     uid = r.json()["user"]["id"]
 
-    rv = await client.post("/api/v1/auth/vk", json={"code": "valid"})
+    rv = await client.post("/api/v1/auth/vk", json={"access_token": "tok"})
     assert rv.status_code == 200
     assert rv.json()["user"]["id"] == uid
     assert rv.json()["user"]["vk_id"] == "vk123456789"
@@ -219,9 +125,8 @@ async def test_vk_without_email_uses_fallback_name(client):
 
     profile = {"id": "vk999", "email": None, "name": None, "avatar_url": None}
     with patch("app.routers.auth.settings.VK_CLIENT_ID", "vk-app-1"), \
-         patch("app.routers.auth.settings.VK_CLIENT_SECRET", "vk-secret"), \
-         patch("app.routers.auth.vk_login_with_code", return_value=profile):
-        r = await client.post("/api/v1/auth/vk", json={"code": "valid"})
+         patch("app.routers.auth.vk_login_with_access_token", return_value=profile):
+        r = await client.post("/api/v1/auth/vk", json={"access_token": "tok"})
     assert r.status_code == 200
     data = r.json()
     assert data["user"]["email"] is None
@@ -233,7 +138,7 @@ async def test_vk_without_email_uses_fallback_name(client):
 
 
 async def test_vk_does_not_touch_google_id(client, vk):
-    r = await client.post("/api/v1/auth/vk", json={"code": "valid"})
+    r = await client.post("/api/v1/auth/vk", json={"access_token": "tok"})
     uid = r.json()["user"]["id"]
 
     me = await client.get(
@@ -242,3 +147,90 @@ async def test_vk_does_not_touch_google_id(client, vk):
     )
     assert me.json()["id"] == uid
     assert me.json().get("google_id") in (None, "")
+
+
+def test_user_info_request_shape():
+    """Сервис VK: POST id.vk.ru/oauth2/user_info?client_id=... телом access_token."""
+    from unittest.mock import MagicMock, patch
+
+    from app.services import vk as vk_service
+
+    response = MagicMock(status_code=200)
+    response.json.return_value = {
+        "sub": "12345",
+        "name": "Иван",
+        "given_name": "Иван",
+        "family_name": "Петров",
+        "email": "Ivan@Mail.RU",
+        "picture": "https://vk.com/photo.jpg",
+    }
+
+    with patch.object(vk_service.httpx, "post", return_value=response) as post:
+        profile = vk_service.fetch_profile("tok", "54803294")
+
+    assert post.call_args.args[0] == "https://id.vk.ru/oauth2/user_info"
+    assert post.call_args.kwargs["params"] == {"client_id": "54803294"}
+    assert post.call_args.kwargs["data"] == {"access_token": "tok"}
+    assert profile == {
+        "id": "12345",
+        "email": "ivan@mail.ru",
+        "name": "Иван",
+        "avatar_url": "https://vk.com/photo.jpg",
+    }
+
+
+def test_user_info_falls_back_to_name_parts():
+    """Без `name` имя собирается из given_name/family_name."""
+    from unittest.mock import MagicMock, patch
+
+    from app.services import vk as vk_service
+
+    response = MagicMock(status_code=200)
+    response.json.return_value = {
+        "sub": "777",
+        "given_name": "Анна",
+        "family_name": "Сидорова",
+    }
+
+    with patch.object(vk_service.httpx, "post", return_value=response):
+        profile = vk_service.fetch_profile("tok", "id")
+
+    assert profile["name"] == "Анна Сидорова"
+    assert profile["email"] is None
+
+
+def test_user_info_without_subject_is_none():
+    """Нет `sub`/`id` — профиля нет (иначе юзер был бы без vk_id)."""
+    from unittest.mock import MagicMock, patch
+
+    from app.services import vk as vk_service
+
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"name": "Без ID"}
+
+    with patch.object(vk_service.httpx, "post", return_value=response):
+        assert vk_service.fetch_profile("tok", "id") is None
+
+
+def test_user_info_error_response_is_none():
+    """Ответ с `error` (например, invalid_token) — не профиль."""
+    from unittest.mock import MagicMock, patch
+
+    from app.services import vk as vk_service
+
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"error": "invalid_token"}
+
+    with patch.object(vk_service.httpx, "post", return_value=response):
+        assert vk_service.fetch_profile("tok", "id") is None
+
+
+def test_user_info_http_error_is_none():
+    from unittest.mock import MagicMock, patch
+
+    from app.services import vk as vk_service
+
+    response = MagicMock(status_code=401, text="unauthorized")
+
+    with patch.object(vk_service.httpx, "post", return_value=response):
+        assert vk_service.fetch_profile("tok", "id") is None

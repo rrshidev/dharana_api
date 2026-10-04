@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 from email_validator import EmailNotValidError, validate_email
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,7 +29,7 @@ from app.services.email_service import (
     send_password_reset_email_async,
 )
 from app.services.google import decode_google_id_token
-from app.services.vk import login_with_code as vk_login_with_code
+from app.services.vk import login_with_access_token as vk_login_with_access_token
 from app.services.yandex import login_with_code as yandex_login_with_code
 from app.services.asana_service import normalize_lang
 
@@ -92,15 +92,24 @@ class GoogleLoginRequest(BaseModel):
 
 
 class OAuthCodeRequest(BaseModel):
-    """Authorization code от VK ID / Яндекса (редирект-флоу на вебе или в приложении)."""
+    """Authorization code от Яндекса (редирект-флоу на вебе или в приложении)."""
     code: str
     # Приложение Android ловит свой колбэк через App Link и присылает его сюда,
     # потому что обмен кода на токен требует ТОЧНОГО redirect_uri из authorize-запроса.
     # Значение проверяется по allowlist (см. _oauth_redirect_uri).
     redirect_uri: str | None = None
-    # PKCE (S256) — обязателен для VK ID: клиент шлёт code_verifier, который
-    # соответствует code_challenge из authorize-запроса. Для Яндекса не нужен.
+    # PKCE (S256) — шлёт клиент, которому он был нужен (Яндекс не требует).
     code_verifier: str | None = None
+
+
+class VKAccessTokenRequest(BaseModel):
+    """access_token из официального виджета VK ID OneTap.
+
+    Виджет сам меняет код на токен в браузере (VK ID требует device_id, который
+    даёт только их SDK), поэтому клиент шлёт нам токен, а мы проверяем его
+    через /oauth2/user_info. Пустой токен → 422.
+    """
+    access_token: str = Field(min_length=1)
 
 
 class PasswordResetRequest(BaseModel):
@@ -319,21 +328,19 @@ def _oauth_redirect_uri(provider: str, requested: str | None) -> str:
 
 
 @router.post("/vk", response_model=TokenResponse)
-async def vk_login(body: OAuthCodeRequest, db: AsyncSession = Depends(get_db)):
-    """Вход по VK ID. Этим же флоу входит MAX: отдельного OAuth у MAX нет.
+async def vk_login(body: VKAccessTokenRequest, db: AsyncSession = Depends(get_db)):
+    """Вход по VK ID.
 
-    Бэкенд сам обменивает код на токен (client_secret не уходит в браузер) и
-    берёт профиль через users.get, поэтому клиент присылает только код.
+    Клиент — официальный виджет OneTap: код на access_token меняет сам браузер
+    (`VKID.Auth.exchangeCode`), а мы проверяем присланный токен через
+    /oauth2/user_info и выдаём свой JWT. client_secret в этой схеме не нужен.
     """
-    if not settings.VK_CLIENT_ID or not settings.VK_CLIENT_SECRET:
+    if not settings.VK_CLIENT_ID:
         raise HTTPException(status_code=501, detail="VK_NOT_CONFIGURED")
 
-    profile = vk_login_with_code(
-        code=body.code,
-        redirect_uri=_oauth_redirect_uri("vk", body.redirect_uri),
+    profile = vk_login_with_access_token(
+        access_token=body.access_token,
         client_id=settings.VK_CLIENT_ID,
-        client_secret=settings.VK_CLIENT_SECRET,
-        code_verifier=body.code_verifier,
     )
     if profile is None:
         raise HTTPException(status_code=401, detail="INVALID_VK_TOKEN")
