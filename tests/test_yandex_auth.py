@@ -63,6 +63,34 @@ async def test_yandex_redirect_uri_built_from_config(client, ya):
     assert ya.call_args.kwargs["redirect_uri"] == "https://dharana.ru/api/auth/yandex/callback"
 
 
+async def test_yandex_client_redirect_uri_allowed(client, ya):
+    """Приложение Android присылает свой колбэк (App Link) — он в allowlist."""
+    from unittest.mock import patch
+
+    app_link = "https://dharana.ru/app/auth/yandex/callback"
+    with patch("app.routers.auth.settings.YANDEX_ALLOWED_REDIRECT_URIS", app_link):
+        r = await client.post(
+            "/api/v1/auth/yandex",
+            json={"code": "valid", "redirect_uri": app_link},
+        )
+    assert r.status_code == 200
+    assert ya.call_args.kwargs["redirect_uri"] == app_link
+
+
+async def test_yandex_client_redirect_uri_rejected(client, ya):
+    """Чужой redirect_uri (например, перехват кода) — 400, обмена не было."""
+    from unittest.mock import patch
+
+    with patch("app.routers.auth.settings.YANDEX_ALLOWED_REDIRECT_URIS", ""):
+        r = await client.post(
+            "/api/v1/auth/yandex",
+            json={"code": "valid", "redirect_uri": "https://evil.example/steal"},
+        )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "OAUTH_REDIRECT_NOT_ALLOWED"
+    ya.assert_not_called()
+
+
 async def test_yandex_new_user(client, ya):
     r = await client.post("/api/v1/auth/yandex", json={"code": "valid"})
     assert r.status_code == 200

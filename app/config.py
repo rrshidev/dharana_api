@@ -54,9 +54,17 @@ class Settings(BaseSettings):
     YANDEX_CLIENT_SECRET: str = ""
 
     # Базовый URL сайта: из него бэкенд сам собирает redirect_uri для обмена
-    # кода на токен (VK/Яндекс требуют точного совпадения с консолью провайдера),
-    # поэтому клиентский redirect_uri не принимаем.
+    # кода на токен (VK/Яндекс требуют точного совпадения с консолью провайдера).
     OAUTH_REDIRECT_BASE_URL: str = "https://dharana.ru"
+
+    # Дополнительные redirect_uri через запятую — для клиентов, у которых
+    # колбэк не на сайте (приложение Android ловит App Link
+    # https://dharana.ru/app/auth/{provider}/callback). Клиент присылает свой
+    # redirect_uri в POST /auth/{provider}, но бэкенд принимает только значения
+    # из этого списка: иначе 400 OAUTH_REDIRECT_NOT_ALLOWED. Пусто — значит
+    # разрешён только дефолтный колбэк сайта.
+    VK_ALLOWED_REDIRECT_URIS: str = ""
+    YANDEX_ALLOWED_REDIRECT_URIS: str = ""
 
     @property
     def cors_origins_list(self) -> List[str]:

@@ -92,8 +92,12 @@ class GoogleLoginRequest(BaseModel):
 
 
 class OAuthCodeRequest(BaseModel):
-    """Authorization code от VK ID / Яндекса (редирект-флоу на вебе)."""
+    """Authorization code от VK ID / Яндекса (редирект-флоу на вебе или в приложении)."""
     code: str
+    # Приложение Android ловит свой колбэк через App Link и присылает его сюда,
+    # потому что обмен кода на токен требует ТОЧНОГО redirect_uri из authorize-запроса.
+    # Значение проверяется по allowlist (см. _oauth_redirect_uri).
+    redirect_uri: str | None = None
 
 
 class PasswordResetRequest(BaseModel):
@@ -291,6 +295,26 @@ async def google_login(body: GoogleLoginRequest, db: AsyncSession = Depends(get_
     )
 
 
+def _oauth_redirect_uri(provider: str, requested: str | None) -> str:
+    """Какой redirect_uri слать в обмене кода на токен.
+
+    Дефолт — колбэк сайта (`{base}/api/auth/{provider}/callback`): им пользуется
+    веб. Приложение Android ловит свой колбэк через App Link, поэтому присылает
+    свой URI — но принять можно только заранее разрешённые значения из
+    `*_ALLOWED_REDIRECT_URIS`, иначе 400. Так клиент не сможет подсунуть
+    чужой redirect_uri (перехват кода) и сломать обмен.
+    """
+    default = f"{settings.OAUTH_REDIRECT_BASE_URL.rstrip('/')}/api/auth/{provider}/callback"
+    if not requested:
+        return default
+    allowed = {default}
+    extra = settings.VK_ALLOWED_REDIRECT_URIS if provider == "vk" else settings.YANDEX_ALLOWED_REDIRECT_URIS
+    allowed.update(uri.strip() for uri in extra.split(",") if uri.strip())
+    if requested not in allowed:
+        raise HTTPException(status_code=400, detail="OAUTH_REDIRECT_NOT_ALLOWED")
+    return requested
+
+
 @router.post("/vk", response_model=TokenResponse)
 async def vk_login(body: OAuthCodeRequest, db: AsyncSession = Depends(get_db)):
     """Вход по VK ID. Этим же флоу входит MAX: отдельного OAuth у MAX нет.
@@ -303,7 +327,7 @@ async def vk_login(body: OAuthCodeRequest, db: AsyncSession = Depends(get_db)):
 
     profile = vk_login_with_code(
         code=body.code,
-        redirect_uri=f"{settings.OAUTH_REDIRECT_BASE_URL.rstrip('/')}/api/auth/vk/callback",
+        redirect_uri=_oauth_redirect_uri("vk", body.redirect_uri),
         client_id=settings.VK_CLIENT_ID,
         client_secret=settings.VK_CLIENT_SECRET,
     )
@@ -330,7 +354,7 @@ async def yandex_login(body: OAuthCodeRequest, db: AsyncSession = Depends(get_db
 
     profile = yandex_login_with_code(
         code=body.code,
-        redirect_uri=f"{settings.OAUTH_REDIRECT_BASE_URL.rstrip('/')}/api/auth/yandex/callback",
+        redirect_uri=_oauth_redirect_uri("yandex", body.redirect_uri),
         client_id=settings.YANDEX_CLIENT_ID,
         client_secret=settings.YANDEX_CLIENT_SECRET,
     )

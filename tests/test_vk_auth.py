@@ -77,6 +77,33 @@ async def test_vk_redirect_uri_built_from_config(client, vk):
     assert kwargs["code"] == "valid"
 
 
+async def test_vk_client_redirect_uri_allowed(client, vk):
+    """Приложение Android присылает свой колбэк (App Link) — он в allowlist."""
+    from unittest.mock import patch
+
+    app_link = "https://dharana.ru/app/auth/vk/callback"
+    with patch("app.routers.auth.settings.VK_ALLOWED_REDIRECT_URIS", app_link):
+        r = await client.post(
+            "/api/v1/auth/vk",
+            json={"code": "valid", "redirect_uri": app_link},
+        )
+    assert r.status_code == 200
+    assert vk.call_args.kwargs["redirect_uri"] == app_link
+
+
+async def test_vk_client_redirect_uri_rejected(client, vk):
+    from unittest.mock import patch
+
+    with patch("app.routers.auth.settings.VK_ALLOWED_REDIRECT_URIS", ""):
+        r = await client.post(
+            "/api/v1/auth/vk",
+            json={"code": "valid", "redirect_uri": "https://evil.example/steal"},
+        )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "OAUTH_REDIRECT_NOT_ALLOWED"
+    vk.assert_not_called()
+
+
 async def test_vk_new_user(client, vk):
     r = await client.post("/api/v1/auth/vk", json={"code": "valid"})
     assert r.status_code == 200
