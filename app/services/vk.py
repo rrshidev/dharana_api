@@ -50,7 +50,14 @@ def exchange_code(
         return None
 
     if resp.status_code != 200:
-        logger.warning(f"VK token HTTP {resp.status_code}: {resp.text[:200]}")
+        logger.warning(
+            "VK token HTTP %s: %s (code_len=%s verifier_len=%s redirect=%s)",
+            resp.status_code,
+            resp.text[:200],
+            len(code),
+            len(code_verifier or ""),
+            redirect_uri,
+        )
         return None
 
     try:
