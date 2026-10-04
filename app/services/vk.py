@@ -1,4 +1,4 @@
-"""VK ID (https://id.vk.com) — обмен authorization code на access_token.
+"""VK ID (https://id.vk.ru) — обмен authorization code на access_token.
 
 Отдельного OAuth у MAX не существует: личный кабинет MAX авторизует через тот же
 VK ID, поэтому обе кнопки (VK и MAX) ходят в один и тот же флоу, а пользователь
@@ -15,8 +15,11 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-TOKEN_URL = "https://id.vk.com/oauth2/token"
-USERS_GET_URL = "https://api.vk.com/method/users.get"
+# VK ID (https://id.vk.ru): страница входа - /authorize, обмен кода на токен -
+# oauth.vk.ru/access_token. Путь /oauth2/authorize и /oauth2/token у VK-ID
+# больше не существует (404), проверено 2026-10-04.
+TOKEN_URL = "https://oauth.vk.ru/access_token"
+USERS_GET_URL = "https://api.vk.ru/method/users.get"
 API_VERSION = "5.199"
 USER_FIELDS = "screen_name,photo_200"
 
