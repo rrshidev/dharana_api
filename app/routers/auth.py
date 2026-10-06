@@ -23,6 +23,7 @@ from app.services.auth_service import (
 )
 from app.services.notify_service import notify_new_user
 from app.services.telegram_avatar import fetch_telegram_avatar
+from app.services.user_merge import merge_users
 from app.services.email_service import (
     send_verification_email_async,
     send_verification_email_now,
@@ -591,19 +592,10 @@ async def verify_telegram_code(
         )
         existing = existing_result.scalar_one_or_none()
         if existing:
-            # Merge: transfer favorites/practice data from bot user, then delete
-            from app.models.models import Favorite, PracticeSession
-            await db.execute(
-                Favorite.__table__.update().where(Favorite.user_id == existing.id).values(user_id=current_user.id)
-            )
-            await db.execute(
-                PracticeSession.__table__.update().where(PracticeSession.user_id == existing.id).values(user_id=current_user.id)
-            )
-            # Free up unique fields before current_user takes them (avoid UNIQUE conflicts)
-            existing.telegram_id = None
-            if pending.telegram_username and pending.telegram_username == existing.username:
-                existing.username = None
-            await db.flush()
+            # Merge: переносим ВСЕ данные существующего пользователя (подписку,
+            # избранное, практики, комплексы, платежи, статистику и т.д.) в
+            # current_user, освобождая уникальные поля перед удалением.
+            await merge_users(db, source=existing, target=current_user)
             await db.delete(existing)
 
         current_user.telegram_id = pending.telegram_id
