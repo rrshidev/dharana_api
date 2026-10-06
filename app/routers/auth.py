@@ -475,10 +475,11 @@ async def send_password_reset(body: PasswordResetRequest, db: AsyncSession = Dep
 
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
-    if user is None or not user.hashed_password:
-        # Аккаунта с таким паролем нет (email-аккаунт или юзер без пароля) —
-        # для Google/Telegram-юзеров письмо не шлём, но отвечаем одинаково.
+    if user is None:
+        # Несуществующий email — отвечаем одинаково (анти-энумерация).
         return {"ok": True}
+    # Аккаунт без пароля (OAuth-вход) тоже получает ссылку — она позволяет
+    # УСТАНОВИТЬ пароль, по сути открыв «дверь» email+пароль.
 
     now = datetime.utcnow()
     if user.password_reset_sent_at and (now - user.password_reset_sent_at) < timedelta(minutes=1):

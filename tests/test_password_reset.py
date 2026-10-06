@@ -57,6 +57,33 @@ async def test_send_does_not_leak_unknown_email(client):
     assert r.json()["ok"] is True
 
 
+async def test_send_works_for_passwordless_user(client):
+    """OAuth-учётка без пароля тоже получает ссылку (установка пароля).
+    Раньше молча пропускалась: письмо не уходило, rate-limit не ставился."""
+    from app.database import async_session
+    from app.models.models import User
+
+    async with async_session() as db:
+        db.add(User(email="oauth@example.com", name="OAuth"))
+        await db.commit()
+
+    r = await client.post(
+        "/api/v1/auth/password-reset/send",
+        json={"email": "oauth@example.com"},
+    )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+    # Запрос прошёл по реальному пути (не отсечён до rate-limit):
+    # повторный запрос через минуту даёт 429, а не 200.
+    second = await client.post(
+        "/api/v1/auth/password-reset/send",
+        json={"email": "oauth@example.com"},
+    )
+    assert second.status_code == 429
+    assert second.json()["detail"] == "TOO_FREQUENT"
+
+
 async def test_send_rejects_invalid_email(client):
     r = await client.post(
         "/api/v1/auth/password-reset/send",
