@@ -42,7 +42,12 @@ async def activate_subscription(
         db.add(sub)
 
     now = datetime.utcnow()
-    days = 30 if body.subscription_type == "monthly" else 365
+    if body.subscription_type == "monthly":
+        days = 30
+    elif body.subscription_type == "quarterly":
+        days = 90
+    else:
+        days = 365
     sub.is_premium = True
     sub.subscription_type = body.subscription_type
     sub.subscription_status = "active"
