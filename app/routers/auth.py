@@ -4,12 +4,12 @@ from datetime import datetime, timedelta
 from email_validator import EmailNotValidError, validate_email
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models.models import User, PendingTelegramAuth
+from app.models.models import User, UserEmail, PendingTelegramAuth
 from app.services.auth_service import (
     hash_password,
     verify_password,
@@ -35,6 +35,29 @@ from app.services.yandex import login_with_code as yandex_login_with_code
 from app.services.asana_service import normalize_lang
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+async def _find_user_by_email(db: AsyncSession, email: str):
+    """Юзер по почте-«двери»: основной или верифицированной дополнительной.
+
+    Вход и сброс пароля работают по любой из них. Неверифицированная
+    дополнительная почта дверью не считается (иначе можно было бы прицепить
+    чужой адрес и угнать сброс — верификация подтверждает владение ящиком).
+    """
+    owned = select(UserEmail.user_id).where(
+        UserEmail.email == email, UserEmail.email_verified == True
+    )
+    result = await db.execute(
+        select(User).where(or_(User.email == email, User.id.in_(owned)))
+    )
+    return result.scalar_one_or_none()
+
+
+async def _email_taken(db: AsyncSession, email: str) -> bool:
+    """Занята ли почта где-либо (основная или вторичная, даже неверифицированная)."""
+    owned = select(UserEmail.user_id).where(UserEmail.email == email)
+    result = await db.execute(select(User.id).where(or_(User.email == email, User.id.in_(owned))))
+    return result.scalar_one_or_none() is not None
 
 # Одноразовые/мусорные почтовые домены (часть большей общедоступной базы).
 DISPOSABLE_DOMAINS = {
@@ -174,9 +197,7 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
         except Exception:
             pass
 
-    result = await db.execute(select(User).where(User.email == email))
-    existing = result.scalar_one_or_none()
-    if existing:
+    if await _email_taken(db, email):
         raise HTTPException(status_code=400, detail="Email already registered")
 
     user = User(
@@ -205,8 +226,7 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     email = body.email.strip().casefold()
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
+    user = await _find_user_by_email(db, email)
     if user is None or not verify_password(body.password, user.hashed_password or ""):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -240,8 +260,7 @@ async def _finish_social_login(
     user = result.scalar_one_or_none()
 
     if user is None and email:
-        email_result = await db.execute(select(User).where(User.email == email))
-        user = email_result.scalar_one_or_none()
+        user = await _find_user_by_email(db, email)
         if user:
             setattr(user, provider_field, provider_id)
 
@@ -473,8 +492,7 @@ async def send_password_reset(body: PasswordResetRequest, db: AsyncSession = Dep
     except EmailNotValidError:
         raise HTTPException(status_code=400, detail="EMAIL_INVALID")
 
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
+    user = await _find_user_by_email(db, email)
     if user is None:
         # Несуществующий email — отвечаем одинаково (анти-энумерация).
         return {"ok": True}
@@ -488,8 +506,10 @@ async def send_password_reset(body: PasswordResetRequest, db: AsyncSession = Dep
     user.password_reset_sent_at = now
     await db.commit()
 
-    token = create_password_reset_token(user.id, user.email)
-    send_password_reset_email_async(user.email, token)
+    # Токен и письмо уходят на ТУ почту, которую юзер ввёл (основную или
+    # дополнительную) — получение письма подтверждает владение именно ею.
+    token = create_password_reset_token(user.id, email)
+    send_password_reset_email_async(email, token)
     return {"ok": True}
 
 
@@ -508,12 +528,28 @@ async def confirm_password_reset(body: PasswordResetConfirmRequest, db: AsyncSes
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-    if user is None or user.email != token_email:
+    if user is None:
+        raise HTTPException(status_code=400, detail="INVALID_RESET_TOKEN")
+
+    # Токен замкнут на почту, на которую ушло письмо (основную или вторичную).
+    known_emails = {e for e in [user.email] if e}
+    owned = (await db.execute(
+        select(UserEmail.email).where(UserEmail.user_id == user.id)
+    )).scalars().all()
+    known_emails.update(owned)
+    if token_email not in known_emails:
         raise HTTPException(status_code=400, detail="INVALID_RESET_TOKEN")
 
     user.hashed_password = hash_password(body.password)
-    # Доступ к почте подтверждён фактом получения письма.
+    # Доступ к почте подтверждён фактом получения письма: помечаем верифицированной
+    # основную почту и (если письмо уходило на вторичную) саму вторичную.
     user.email_verified = True
+    if token_email != user.email:
+        await db.execute(
+            UserEmail.__table__.update().where(
+                UserEmail.user_id == user.id, UserEmail.email == token_email
+            ).values(email_verified=True)
+        )
     await db.commit()
 
     return {"ok": True}

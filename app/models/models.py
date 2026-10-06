@@ -66,6 +66,8 @@ class User(Base):
     favorites = relationship("Favorite", back_populates="user", cascade="all, delete-orphan")
     practice_sessions = relationship("PracticeSession", back_populates="user", cascade="all, delete-orphan")
     sequences = relationship("Sequence", back_populates="user", cascade="all, delete-orphan")
+    # Дополнительные почты-«двери» (вход/sброс работают по любой из них).
+    extra_emails = relationship("UserEmail", back_populates="user", cascade="all, delete-orphan")
 
 
 class UserAvatar(Base):
@@ -78,6 +80,25 @@ class UserAvatar(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="avatars")
+
+
+class UserEmail(Base):
+    """Дополнительные почты юзера (основная — у User.email).
+
+    Любая такая почта — ещё одна «дверь» для входа и сброса пароля. Вторичная
+    почта считается доступной для входа, если она верифицирована; при слиянии
+    почты переезжают уже верифицированными (это были реальные аккаунты).
+    """
+
+    __tablename__ = "app_user_emails"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("app_users.id"), nullable=False, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    email_verified = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="extra_emails")
 
 
 class Favorite(Base):

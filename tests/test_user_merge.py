@@ -265,13 +265,13 @@ async def test_telegram_verify_inherits_admin_and_ban(client):
 
 
 async def test_merge_transfers_email_password_door(client):
-    """Реальный кейс: на target почта-«заглушка» без пароля (Яндекс-вход),
-    на source связка gmail+пароль. После слияния email-дверь не умирает:
-    пароль переезжает, а почтой для входа становится gmail source."""
+    """Реальный кейс: на target почта без пароля (Яндекс-вход), на source связка
+    gmail+пароль. После слияния лишней двери не пропадает: пароль переезжает,
+    gmail становится вторичной почтой, yandex остаётся основной."""
     from sqlalchemy import select
 
     from app.database import async_session
-    from app.models.models import User
+    from app.models.models import User, UserEmail
     from app.services.auth_service import hash_password, verify_password
     from app.services.user_merge import merge_users
 
@@ -294,12 +294,16 @@ async def test_merge_transfers_email_password_door(client):
     async with async_session() as s:
         target = (await s.execute(select(User).where(User.id == target_id))).scalar_one()
         source = (await s.execute(select(User).where(User.id == source_id))).scalar_one_or_none()
+        alias = (await s.execute(select(UserEmail).where(
+            UserEmail.user_id == target_id, UserEmail.email == "user@gmail.com"
+        ))).scalar_one_or_none()
 
     assert source is None
-    assert target.email == "user@gmail.com"  # дверь та, что юзер знал
-    assert target.email_verified is True
+    assert target.email == "user@yandex.ru"  # основная осталась
     assert target.telegram_id == 31337
     assert verify_password("secret", target.hashed_password)  # вход работает
+    assert alias is not None  # и gmail сохранён как дверь
+    assert alias.email_verified is True
 
 
 async def test_merge_keeps_target_password_when_exists(client):
@@ -331,4 +335,45 @@ async def test_merge_keeps_target_password_when_exists(client):
     assert source is None
     assert target.email == "target@test.ru"  # target не потерял своё
     assert verify_password("old", target.hashed_password)  # его пароль сохранён
+    assert target.vk_id == "vk1"
+
+
+async def test_merge_preserves_source_email_as_secondary(client):
+    """Почта source не теряется при слиянии: уезжает в app_user_emails
+    как дополнительная дверь, пока target хранит свою основную."""
+    from sqlalchemy import select
+
+    from app.database import async_session
+    from app.models.models import User, UserEmail
+    from app.services.auth_service import hash_password
+    from app.services.user_merge import merge_users
+
+    async with async_session() as s:
+        target = User(name="Target", email="target@test.ru", hashed_password=hash_password("secret"))
+        source = User(
+            email="source@test.ru", email_verified=True,
+            hashed_password=hash_password("other"), vk_id="vk1",
+        )
+        s.add_all([target, source])
+        await s.commit()
+        await s.refresh(target)
+        await s.refresh(source)
+        await merge_users(s, source=source, target=target)
+        await s.delete(source)
+        await s.commit()
+        target_id = target.id
+        source_id = source.id
+
+    async with async_session() as s:
+        target = (await s.execute(select(User).where(User.id == target_id))).scalar_one()
+        source = (await s.execute(select(User).where(User.id == source_id))).scalar_one_or_none()
+        alias = (await s.execute(select(UserEmail).where(
+            UserEmail.user_id == target_id, UserEmail.email == "source@test.ru"
+        ))).scalar_one_or_none()
+
+    assert source is None
+    assert target.email == "target@test.ru"  # основная не перезаписана
+    assert alias is not None  # вторичная почта сохранена
+    assert alias.email == "source@test.ru"
+    assert alias.email_verified is True
     assert target.vk_id == "vk1"
