@@ -229,3 +229,36 @@ async def test_telegram_verify_premium_wins_over_free(client):
     assert len(subs) == 1  # осталась одна подписка
     assert subs[0].is_premium is True  # платная сохранилась
     assert subs[0].subscription_end is not None
+
+
+async def test_telegram_verify_inherits_admin_and_ban(client):
+    """Админ не «умирает» при слиянии его учёток: is_admin переносится на target.
+    Бан тоже переживает слияние (нельзя сбросить бан, слившись в другую учётку)."""
+    from app.services.auth_service import create_access_token
+
+    target_id = await _seed_user(name="Main", email="main@test.ru")
+    source_id = await _seed_user(telegram_id=888, is_admin=True, is_banned=True)
+    await _seed_pending("444444", 888)
+
+    token = create_access_token(target_id)
+    r = await client.post(
+        "/api/v1/auth/telegram/verify",
+        json={"code": "444444"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+
+    from sqlalchemy import select
+
+    from app.database import async_session as s2
+    from app.models.models import User
+
+    async with s2() as s:
+        target = (await s.execute(select(User).where(User.id == target_id))).scalar_one()
+        source = (await s.execute(
+            select(User).where(User.id == source_id)
+        )).scalar_one_or_none()
+
+    assert source is None
+    assert target.is_admin is True  # права админа не потеряны
+    assert target.is_banned is True  # бан не сброшен слиянием

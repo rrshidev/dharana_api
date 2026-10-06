@@ -182,4 +182,13 @@ async def merge_users(db: AsyncSession, source: User, target: User) -> dict:
             setattr(target, field, getattr(source, field))
             summary["profile"].append(field)
 
+    # Права и статусы: админ не должен «умирать» при слиянии его учёток,
+    # а бан — переживать слияние (нельзя сбросить бан, слившись с другим).
+    if source.is_admin and not target.is_admin:
+        target.is_admin = True
+        summary["profile"].append("is_admin")
+    if source.is_banned and not target.is_banned:
+        target.is_banned = True
+        summary["profile"].append("is_banned")
+
     return summary
