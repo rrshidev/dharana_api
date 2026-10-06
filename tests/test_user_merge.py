@@ -262,3 +262,73 @@ async def test_telegram_verify_inherits_admin_and_ban(client):
     assert source is None
     assert target.is_admin is True  # права админа не потеряны
     assert target.is_banned is True  # бан не сброшен слиянием
+
+
+async def test_merge_transfers_email_password_door(client):
+    """Реальный кейс: на target почта-«заглушка» без пароля (Яндекс-вход),
+    на source связка gmail+пароль. После слияния email-дверь не умирает:
+    пароль переезжает, а почтой для входа становится gmail source."""
+    from sqlalchemy import select
+
+    from app.database import async_session
+    from app.models.models import User
+    from app.services.auth_service import hash_password, verify_password
+    from app.services.user_merge import merge_users
+
+    async with async_session() as s:
+        target = User(name="Target", email="user@yandex.ru")
+        source = User(
+            email="user@gmail.com", hashed_password=hash_password("secret"),
+            email_verified=True, telegram_id=31337,
+        )
+        s.add_all([target, source])
+        await s.commit()
+        await s.refresh(target)
+        await s.refresh(source)
+        await merge_users(s, source=source, target=target)
+        await s.delete(source)
+        await s.commit()
+        target_id = target.id
+        source_id = source.id
+
+    async with async_session() as s:
+        target = (await s.execute(select(User).where(User.id == target_id))).scalar_one()
+        source = (await s.execute(select(User).where(User.id == source_id))).scalar_one_or_none()
+
+    assert source is None
+    assert target.email == "user@gmail.com"  # дверь та, что юзер знал
+    assert target.email_verified is True
+    assert target.telegram_id == 31337
+    assert verify_password("secret", target.hashed_password)  # вход работает
+
+
+async def test_merge_keeps_target_password_when_exists(client):
+    """У обеих учёток свой email+пароль — target сохраняет своё, source чистится."""
+    from sqlalchemy import select
+
+    from app.database import async_session
+    from app.models.models import User
+    from app.services.auth_service import hash_password, verify_password
+    from app.services.user_merge import merge_users
+
+    async with async_session() as s:
+        target = User(name="Target", email="target@test.ru", hashed_password=hash_password("old"))
+        source = User(email="source@test.ru", hashed_password=hash_password("new"), vk_id="vk1")
+        s.add_all([target, source])
+        await s.commit()
+        await s.refresh(target)
+        await s.refresh(source)
+        await merge_users(s, source=source, target=target)
+        await s.delete(source)
+        await s.commit()
+        target_id = target.id
+        source_id = source.id
+
+    async with async_session() as s:
+        target = (await s.execute(select(User).where(User.id == target_id))).scalar_one()
+        source = (await s.execute(select(User).where(User.id == source_id))).scalar_one_or_none()
+
+    assert source is None
+    assert target.email == "target@test.ru"  # target не потерял своё
+    assert verify_password("old", target.hashed_password)  # его пароль сохранён
+    assert target.vk_id == "vk1"

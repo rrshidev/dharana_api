@@ -7,6 +7,12 @@
 Уникальные поля (email, username, telegram_id, google_id, vk_id, yandex_id)
 переходят к `target`, только если у него они пусты; иначе остаются у `target`,
 а у `source` чистятся — чтобы не наткнуться на UNIQUE при удалении.
+
+Вход email+пароль не должен «умирать»: если у `target` пароля нет, а у `source`
+есть — пароль переезжает, а email-дверью становится почта `source` (та, что
+юзер вводил при входе). `is_admin`/`is_banned` тоже переносятся — админ не
+потеряет права при слиянии своих учёток, а бан нельзя сбросить слиянием.
+
 Все изменения — в одной транзакции вызывающего (коммит делает роут).
 """
 
@@ -141,6 +147,21 @@ async def merge_users(db: AsyncSession, source: User, target: User) -> dict:
                 src_sub.user_id = target.id
             summary["subscription"] = "merged"
 
+    # Вход email+пароль не должен «умирать»: если у target пароля не было, а
+    # у source был — забираем пароль и держим email-дверь такой, какой юзер её
+    # знал (email source становится почтой для входа, если у target своей нет
+    # или она была без пароля). До общего цикла — чтобы освободить source.email.
+    if source.hashed_password and not target.hashed_password:
+        target.hashed_password = source.hashed_password
+        summary["profile"].append("hashed_password")
+        if source.email and target.email != source.email:
+            adopted_email = source.email
+            source.email = None
+            await db.flush()
+            target.email = adopted_email
+            target.email_verified = bool(target.email_verified or source.email_verified)
+            summary["moved_ids"].append("email")
+
     # Уникальные поля: сначала освобождаем занятые source, потом занимаем target.
     moves = {}
     for field in _UNIQUE_FIELDS:
@@ -161,7 +182,7 @@ async def merge_users(db: AsyncSession, source: User, target: User) -> dict:
             setattr(target, field, value)
             summary["moved_ids"].append(field)
         if "email" in moves:
-            target.email_verified = bool(source.email_verified)
+            target.email_verified = bool(target.email_verified or source.email_verified)
 
     # Статистика практик: суммируем, рекорды берём по максимуму.
     target.total_practices = (target.total_practices or 0) + (source.total_practices or 0)
