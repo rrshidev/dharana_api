@@ -1,3 +1,6 @@
+import re
+from datetime import time
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -11,11 +14,20 @@ from app.services.auth_service import require_user
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
+# Время рассылки "HH:MM" — тот же формат, что у бота (daily_asana_handlers).
+_TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+# Часовой пояс: "UTC", "UTC+3", "UTC+5:30", "UTC-7", "GMT+2" (как в боте).
+_TZ_RE = re.compile(r"^(UTC|GMT)([+-]\d{1,2}(:\d{2})?)?$", re.IGNORECASE)
+
 
 class ProfileUpdateRequest(BaseModel):
     name: str | None = None
     username: str | None = None
     bio: str | None = None
+    daily_asana_enabled: bool | None = None
+    daily_asana_time: str | None = None
+    timezone: str | None = None
+    language: str | None = None
 
 
 class AvatarResponse(BaseModel):
@@ -45,6 +57,10 @@ async def get_profile(user: User = Depends(require_user)):
         "longest_streak": user.longest_streak,
         "last_practice_at": user.last_practice_at.isoformat() if user.last_practice_at else None,
         "created_at": user.created_at.isoformat() if user.created_at else None,
+        "daily_asana_enabled": bool(user.daily_asana_enabled),
+        "daily_asana_time": user.daily_asana_time.strftime("%H:%M") if user.daily_asana_time else None,
+        "timezone": user.timezone or "UTC",
+        "language": user.language or "ru",
     }
 
 
@@ -66,6 +82,33 @@ async def update_profile(
         user.username = body.username
     if body.bio is not None:
         user.bio = body.bio
+
+    if body.daily_asana_enabled is not None:
+        user.daily_asana_enabled = body.daily_asana_enabled
+
+    if body.daily_asana_time is not None:
+        m = _TIME_RE.match(body.daily_asana_time.strip())
+        if not m:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid daily_asana_time, expected HH:MM (e.g. 09:00)",
+            )
+        user.daily_asana_time = time(int(m.group(1)), int(m.group(2)))
+
+    if body.timezone is not None:
+        tz = body.timezone.strip()
+        if not _TZ_RE.match(tz):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid timezone, expected UTC, UTC+3 or UTC+5:30",
+            )
+        user.timezone = tz.upper()
+
+    if body.language is not None:
+        lang = body.language.strip().lower()
+        if lang not in ("ru", "en"):
+            raise HTTPException(status_code=400, detail="Language must be 'ru' or 'en'")
+        user.language = lang
 
     await db.commit()
     await db.refresh(user)

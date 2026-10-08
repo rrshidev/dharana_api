@@ -1,6 +1,7 @@
 import os
 import logging
 import random
+from datetime import date, datetime, timedelta
 from typing import List, Optional, Dict
 
 from app.config import settings
@@ -60,6 +61,33 @@ def resolve_lang(lang: Optional[str], accept_language: Optional[str] = None) -> 
             if code[:2] in SUPPORTED_LANGS:
                 return code[:2]
     return "ru"
+
+
+def parse_timezone_offset(timezone_str: Optional[str]) -> timedelta:
+    """Парсит пояс вида 'UTC', 'UTC+3', 'UTC+3:30', 'UTC-5' → смещение от UTC.
+
+    Тот же формат хранит и парсит Telegram-бот (daily_asana_handlers):
+    приложение и веб сохраняют его без изменений.
+    """
+    if not timezone_str:
+        return timedelta(0)
+    tz_str = timezone_str.strip().upper()
+    for prefix in ("UTC", "GMT"):
+        if tz_str.startswith(prefix):
+            tz_str = tz_str[len(prefix):].strip()
+            break
+    if not tz_str:
+        return timedelta(0)
+
+    sign = -1 if tz_str.startswith("-") else 1
+    tz_str = tz_str.lstrip("+-")
+    parts = tz_str.split(":")
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1]) if len(parts) > 1 else 0
+    except ValueError:
+        return timedelta(0)
+    return timedelta(hours=sign * hours, minutes=sign * minutes)
 
 
 class AsanaService:
@@ -204,6 +232,32 @@ class AsanaService:
         if not all_names:
             return None
         name, cat_key = random.choice(all_names)
+        return self.get_asana_detail(name, lang)
+
+    def get_daily_asana_name(self, day: Optional[date] = None) -> Optional[str]:
+        """Детерминированная «Асана дня»: одна на календарные сутки для всех.
+
+        Seed — только UTC-дата (без lang и прочего), список имён сортируется:
+        порядок os.listdir нестабилен, без сортировки результат менялся бы
+        между перезапусками/платформами.
+        """
+        categories = self._get_categories()
+        all_names = sorted(
+            {name for names in categories.values() for name in names}
+        )
+        if not all_names:
+            return None
+        if day is None:
+            day = datetime.utcnow().date()
+        rng = random.Random(day.isoformat())
+        return rng.choice(all_names)
+
+    def get_daily_asana(
+        self, lang: Optional[str] = None, day: Optional[date] = None
+    ) -> Optional[Dict]:
+        name = self.get_daily_asana_name(day)
+        if name is None:
+            return None
         return self.get_asana_detail(name, lang)
 
     def get_basics(self, lang: Optional[str] = None) -> List[Dict]:

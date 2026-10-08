@@ -140,6 +140,26 @@ async def get_current_user(
     return user
 
 
+async def get_optional_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: AsyncSession = Depends(get_db),
+) -> Optional[User]:
+    """JWT опционален: без токена или с невалидным — аноним, никогда не 401.
+
+    Нужен эндпоинтам, которые работают и для гостей (GET /asanas/day):
+    протухший токен не должен ломать загрузку страницы.
+    """
+    if credentials is None:
+        return None
+
+    token_data = decode_token(credentials.credentials)
+    if token_data is None:
+        return None
+
+    result = await db.execute(select(User).where(User.id == token_data.user_id))
+    return result.scalar_one_or_none()
+
+
 async def require_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: AsyncSession = Depends(get_db),

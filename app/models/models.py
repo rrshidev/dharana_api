@@ -70,6 +70,20 @@ class User(Base):
     extra_emails = relationship("UserEmail", back_populates="user", cascade="all, delete-orphan")
 
 
+class DailyAsanaLog(Base):
+    """Последняя отправленная «Асана дня» (пишет Telegram-бот, читает GET /asanas/day).
+
+    Таблицу в проде создал бот (create_all); миграция API идемпотентна.
+    """
+
+    __tablename__ = "daily_asana_logs"
+
+    id = Column(Integer, primary_key=True)
+    telegram_id = Column(Integer, unique=True, nullable=False, index=True)
+    asana_name = Column(String(500), nullable=False)  # Каноническое имя (base_name)
+    sent_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class UserAvatar(Base):
     __tablename__ = "app_user_avatars"
 
