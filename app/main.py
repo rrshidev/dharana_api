@@ -149,8 +149,13 @@ app.include_router(metrics_router.router, prefix="/api/v1")
 
 import os
 uploads_dir = os.path.join(os.path.dirname(__file__), "..", "uploads")
-os.makedirs(uploads_dir, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+# Публично раздаём только аватары и вложения рассылок. Квитанции оплаты
+# (/uploads/receipts) наружу не отдаются — для них есть подписанный
+# /api/v1/media/receipts/{filename} (см. routers/media.py).
+for sub in ("avatars", "messages"):
+    os.makedirs(os.path.join(uploads_dir, sub), exist_ok=True)
+app.mount("/uploads/avatars", StaticFiles(directory=os.path.join(uploads_dir, "avatars")), name="uploads_avatars")
+app.mount("/uploads/messages", StaticFiles(directory=os.path.join(uploads_dir, "messages")), name="uploads_messages")
 
 MEDIA_DIR = settings.MEDIA_DIR
 if os.path.exists(MEDIA_DIR):

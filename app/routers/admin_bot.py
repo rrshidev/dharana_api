@@ -17,7 +17,8 @@ from app.models.models import (
 from app.services.video_service import video_service, DuplicateSequenceError
 from app.services.notify_service import notify_admin
 from app.services.bot_auth import require_bot_key
-from app.services.media_urls import sign_media_url
+from app.services.media_urls import sign_media_url, sign_receipt_url
+from app.services.upload_service import save_upload, read_limited
 
 router = APIRouter(prefix="/admin-bot", tags=["admin-bot"])
 
@@ -304,15 +305,7 @@ async def bot_payment_receipt(
 ):
     from app.routers.payments import RECEIPT_DIR
 
-    os.makedirs(RECEIPT_DIR, exist_ok=True)
-    ext = os.path.splitext(file.filename or "receipt.jpg")[1] or ".jpg"
-    filename = f"{uuid.uuid4().hex}{ext}"
-    filepath = os.path.join(RECEIPT_DIR, filename)
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty file")
-    with open(filepath, "wb") as f:
-        f.write(content)
+    filename, _ = await save_upload(file, RECEIPT_DIR, allow_pdf=True, max_mb=10)
 
     url = f"/uploads/receipts/{filename}"
     user = await _find_user(db, telegram_id=telegram_id)
@@ -333,7 +326,7 @@ async def bot_payment_receipt(
 
     # Бот опрашивает /admin-bot/payments/pending и показывает чек админу (фото + кнопки)
 
-    return {"id": payment.id, "status": payment.status, "receipt_url": url}
+    return {"id": payment.id, "status": payment.status, "receipt_url": sign_receipt_url(url)}
 
 
 @router.get("/payments/confirmations")
@@ -370,7 +363,7 @@ async def bot_payment_confirmations(_=Depends(require_bot_key), db: AsyncSession
             "user_name": p.user_name,
             "payment_method": p.payment_method,
             "amount": p.amount,
-            "receipt_url": p.receipt_url,
+            "receipt_url": sign_receipt_url(p.receipt_url),
             "premium_days": p.premium_days,
             "subscription_end": end,
             "user_id": p.user_id,
@@ -399,7 +392,7 @@ async def bot_payment_rejections(_=Depends(require_bot_key), db: AsyncSession = 
             "user_id": p.user_id,
             "payment_method": p.payment_method,
             "amount": p.amount,
-            "receipt_url": p.receipt_url,
+            "receipt_url": sign_receipt_url(p.receipt_url),
             "reviewed_at": p.reviewed_at.isoformat() if p.reviewed_at else None,
         }
         for p in payments
@@ -427,7 +420,7 @@ async def bot_payment_pending(_=Depends(require_bot_key), db: AsyncSession = Dep
             "user_id": p.user_id,
             "payment_method": p.payment_method,
             "amount": p.amount,
-            "receipt_url": p.receipt_url,
+            "receipt_url": sign_receipt_url(p.receipt_url),
         }
         for p in payments
     ]
@@ -688,9 +681,7 @@ async def bot_add_sequence_video(
     db: AsyncSession = Depends(get_db),
 ):
     """Add a ready-sequence video (free|premium) from the bot."""
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty file")
+    content = await read_limited(file, 300)
     clean_name = (name or "").strip().title()
     if not clean_name:
         raise HTTPException(status_code=400, detail="name is required")

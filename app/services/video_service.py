@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.models import Video
+from app.services.upload_service import sniff_video
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +146,8 @@ class VideoService:
             raise ValueError(
                 f"Unsupported video format '{ext}'. Allowed: {', '.join(sorted(VIDEO_EXTENSIONS))}"
             )
+        if not sniff_video(content):
+            raise ValueError("File content is not a video")
 
         is_premium = section == "premium"
         target_dir = self.sequences_premium_dir if is_premium else self.sequences_free_dir
@@ -234,6 +237,8 @@ class VideoService:
             raise ValueError(
                 f"Unsupported video format '{ext}'. Allowed: {', '.join(sorted(VIDEO_EXTENSIONS))}"
             )
+        if not sniff_video(content):
+            raise ValueError("File content is not a video")
 
         safe_file = self._safe_filename(name, ext)
         filepath_rel = f"catalog/{safe_file}"

@@ -11,8 +11,8 @@ from app.services.auth_service import require_user
 from app.services.video_service import video_service, DuplicateSequenceError
 from app.services.asana_service import asana_service
 from app.services.notify_service import notify_admin, notify_error
-from app.services.upload_service import save_upload
-from app.services.media_urls import sign_media_url
+from app.services.upload_service import save_upload, read_limited, sniff_kind
+from app.services.media_urls import sign_media_url, sign_receipt_url
 import os
 import uuid
 import httpx
@@ -817,7 +817,7 @@ async def list_payments(
                 "source": p.source,
                 "payment_method": p.payment_method,
                 "amount": p.amount,
-                "receipt_url": p.receipt_url,
+                "receipt_url": sign_receipt_url(p.receipt_url),
                 "status": p.status,
                 "premium_days": p.premium_days,
                 "created_at": p.created_at.isoformat() if p.created_at else None,
@@ -846,7 +846,7 @@ async def get_payment(
         "source": p.source,
         "payment_method": p.payment_method,
         "amount": p.amount,
-        "receipt_url": p.receipt_url,
+        "receipt_url": sign_receipt_url(p.receipt_url),
         "status": p.status,
         "premium_days": p.premium_days,
         "reviewed_by": p.reviewed_by,
@@ -1076,9 +1076,7 @@ async def admin_add_sequence_video(
     db: AsyncSession = Depends(get_db),
 ):
     """Add a ready-sequence video (free|premium) from the admin panel."""
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty file")
+    content = await read_limited(file, 300)
     clean_name = (name or "").strip().title()
     if not clean_name:
         raise HTTPException(status_code=400, detail="name is required")
@@ -1188,9 +1186,9 @@ async def admin_upload_asana_photo(
     db: AsyncSession = Depends(get_db),
 ):
     """Upload/replace a photo for an existing asana."""
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty file")
+    content = await read_limited(file, 10)
+    if sniff_kind(content) not in ("jpeg", "png", "webp", "gif"):
+        raise HTTPException(status_code=400, detail="Unsupported file type")
 
     ext = os.path.splitext(file.filename or "")[1].lower() or ".jpg"
     try:
@@ -1215,9 +1213,7 @@ async def admin_upload_asana_video(
     if asana_service.get_asana_detail(name) is None:
         raise HTTPException(status_code=404, detail=f"Асана '{name}' не найдена")
 
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty file")
+    content = await read_limited(file, 300)
 
     try:
         video = await video_service.add_asana_video(

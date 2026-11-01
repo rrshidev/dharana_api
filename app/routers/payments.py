@@ -13,6 +13,7 @@ from app.services.auth_service import require_user, get_current_user
 from app.services.subscription_service import get_or_create_subscription
 from app.services.notify_service import notify_admin, notify_error
 from app.services.upload_service import save_upload
+from app.services.media_urls import sign_receipt_url
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
@@ -66,7 +67,7 @@ async def upload_receipt(
 
     # Бот опрашивает /admin-bot/payments/pending и показывает чек админу (фото + кнопки)
 
-    return {"id": payment.id, "status": payment.status, "receipt_url": url}
+    return {"id": payment.id, "status": payment.status, "receipt_url": sign_receipt_url(url)}
 
 
 @router.get("/notifications")
