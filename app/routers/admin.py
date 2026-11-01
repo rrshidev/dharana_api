@@ -11,6 +11,8 @@ from app.services.auth_service import require_user
 from app.services.video_service import video_service, DuplicateSequenceError
 from app.services.asana_service import asana_service
 from app.services.notify_service import notify_admin, notify_error
+from app.services.upload_service import save_upload
+from app.services.media_urls import sign_media_url
 import os
 import uuid
 import httpx
@@ -621,27 +623,27 @@ async def upload_admin_message_media(
     admin: User = Depends(require_admin),
 ):
     """Загрузить изображение/чек для сообщения пользователю."""
-    os.makedirs(MESSAGES_UPLOAD_DIR, exist_ok=True)
-    ext = os.path.splitext(file.filename or "attachment.jpg")[1].lower() or ".jpg"
-    filename = f"{uuid.uuid4().hex}{ext}"
-    filepath = os.path.join(MESSAGES_UPLOAD_DIR, filename)
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty file")
-    if len(content) > MAX_MEDIA_BYTES:
-        raise HTTPException(status_code=400, detail="File too large (max 10 MB)")
-    with open(filepath, "wb") as f:
-        f.write(content)
+    filename, _ = await save_upload(file, MESSAGES_UPLOAD_DIR, max_mb=10)
 
     return {"media_url": f"/uploads/messages/{filename}"}
 
 
 def _local_media_path(media_url: str) -> Optional[str]:
-    """Преобразовать /uploads/... в локальный путь к файлу на диске."""
+    """Преобразовать /uploads/... в локальный путь к файлу на диске.
+
+    Путь обязан остаться внутри uploads и быть изображением: иначе через
+    media_url можно было прочитать произвольный файл и отправить его в Telegram.
+    """
     if not media_url or not str(media_url).startswith("/uploads/"):
         return None
+    root = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "..", "uploads"))
     rel = str(media_url)[len("/uploads/"):]
-    return os.path.join(os.path.dirname(__file__), "..", "..", "uploads", rel)
+    candidate = os.path.realpath(os.path.join(root, rel))
+    if not candidate.startswith(root + os.sep):
+        return None
+    if os.path.splitext(candidate)[1].lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+        return None
+    return candidate
 
 
 async def _send_telegram_photo(chat_id, message, media_url):
@@ -1057,7 +1059,7 @@ async def admin_list_sequences(
                 "is_premium": v.is_premium,
                 "filename": v.filename,
                 "filepath": v.filepath,
-                "video_url": f"/api/v1/media/videos/{v.filepath}",
+                "video_url": sign_media_url(v.filepath),
                 "created_at": v.created_at.isoformat() if v.created_at else None,
             }
             for v in videos
@@ -1107,7 +1109,7 @@ async def admin_add_sequence_video(
         "id": video.id,
         "name": video.sequence_name,
         "is_premium": video.is_premium,
-        "video_url": f"/api/v1/media/videos/{video.filepath}",
+        "video_url": sign_media_url(video.filepath),
     }
 
 
@@ -1233,7 +1235,7 @@ async def admin_upload_asana_video(
         "ok": True,
         "id": video.id,
         "asana_name": video.asana_name,
-        "video_url": f"/api/v1/media/videos/{video.filepath}",
+        "video_url": sign_media_url(video.filepath),
     }
 
 
@@ -1301,7 +1303,7 @@ async def admin_update_sequence(
         "id": video.id,
         "name": video.sequence_name,
         "is_premium": video.is_premium,
-        "video_url": f"/api/v1/media/videos/{video.filepath}",
+        "video_url": sign_media_url(video.filepath),
     }
 
 

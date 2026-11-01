@@ -11,6 +11,7 @@ import uuid
 from app.database import get_db
 from app.models.models import User, UserAvatar
 from app.services.auth_service import require_user
+from app.services.upload_service import save_upload
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -212,13 +213,7 @@ async def upload_avatar(
     if len(avatars) >= 5:
         raise HTTPException(status_code=400, detail="Maximum 5 avatars allowed")
 
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    ext = os.path.splitext(file.filename or "avatar.jpg")[1] or ".jpg"
-    filename = f"{uuid.uuid4().hex}{ext}"
-    filepath = os.path.join(UPLOAD_DIR, filename)
-    content = await file.read()
-    with open(filepath, "wb") as f:
-        f.write(content)
+    filename, _ = await save_upload(file, UPLOAD_DIR, max_mb=10)
 
     url = f"/uploads/avatars/{filename}"
     avatar = UserAvatar(user_id=user.id, url=url, is_primary=len(avatars) == 0)

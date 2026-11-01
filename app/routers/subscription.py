@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.models import User, UserSubscription
-from app.services.auth_service import require_user
+from app.services.auth_service import require_admin, require_user
 from app.services.subscription_service import get_subscription_status
 from app.services.notify_service import notify_subscription
 
@@ -28,9 +28,15 @@ async def subscription_status(
 @router.post("/activate")
 async def activate_subscription(
     body: ActivateSubscriptionRequest,
-    user: User = Depends(require_user),
+    user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
+    """Ручная выдача подписки — только администратор.
+
+    Раньше эндпоинт был доступен любому пользователю и позволял бесплатно
+    выдать себе Premium на год. Штатный путь выдачи — подтверждение платежа
+    администратором (admin/admin_bot).
+    """
     from datetime import datetime, timedelta
 
     result = await db.execute(

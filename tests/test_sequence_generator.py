@@ -1,6 +1,8 @@
 """Генератор практики: структура последовательности и лимиты генераций."""
 
 import os
+from datetime import datetime, timedelta
+
 import pytest
 
 from app.config import settings
@@ -133,9 +135,22 @@ async def test_premium_generation_unlimited(client):
     token = await _register(client, "gen_prem@example.com")
     headers = {"Authorization": f"Bearer {token}"}
 
-    act = await client.post("/api/v1/subscription/activate", headers=headers,
-                            json={"subscription_type": "monthly"})
-    assert act.status_code == 200
+    # Premium выдаётся администратором/платежом, поэтому в тесте ставим его в БД.
+    me = await client.get("/api/v1/auth/me", headers=headers)
+    user_id = me.json()["id"]
+    from app.database import async_session
+    from app.models.models import UserSubscription
+
+    async with async_session() as s:
+        s.add(UserSubscription(
+            user_id=user_id,
+            is_premium=True,
+            subscription_status="active",
+            subscription_type="monthly",
+            subscription_start=datetime.utcnow(),
+            subscription_end=datetime.utcnow() + timedelta(days=30),
+        ))
+        await s.commit()
 
     body = {"difficulty": "advanced", "duration_minutes": 60, "focus": "balance"}
     for _ in range(3):

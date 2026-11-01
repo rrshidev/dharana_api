@@ -16,16 +16,10 @@ from app.models.models import (
 )
 from app.services.video_service import video_service, DuplicateSequenceError
 from app.services.notify_service import notify_admin
+from app.services.bot_auth import require_bot_key
+from app.services.media_urls import sign_media_url
 
 router = APIRouter(prefix="/admin-bot", tags=["admin-bot"])
-
-
-def require_bot_key(x_bot_key: Optional[str] = Header(default=None)):
-    if not settings.BOT_ADMIN_KEY:
-        raise HTTPException(status_code=500, detail="BOT_ADMIN_KEY not configured")
-    if x_bot_key != settings.BOT_ADMIN_KEY:
-        raise HTTPException(status_code=403, detail="Invalid bot key")
-    return True
 
 
 class IsAdminRequest(BaseModel):
@@ -727,5 +721,5 @@ async def bot_add_sequence_video(
         "id": video.id,
         "name": video.sequence_name,
         "is_premium": video.is_premium,
-        "video_url": f"/api/v1/media/videos/{video.filepath}",
+        "video_url": sign_media_url(video.filepath),
     }

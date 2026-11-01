@@ -10,6 +10,11 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 1440
 
+    # Прод: /docs и /openapi.json выключены по умолчанию.
+    ENABLE_DOCS: bool = False
+    # Срок жизни подписанной ссылки на видео (сек).
+    MEDIA_URL_TTL_SECONDS: int = 21600
+
     MINIO_ENDPOINT: str = "localhost:9000"
     MINIO_ACCESS_KEY: str = "minioadmin"
     MINIO_SECRET_KEY: str = "minioadmin"

@@ -12,19 +12,12 @@ from app.services.auth_service import require_user
 from app.services.asana_service import resolve_lang
 from app.services.subscription_service import get_subscription_status, consume_generation
 from app.services.sequence_generator import sequence_generator
+from app.services.bot_auth import require_timer_key
 
 router = APIRouter(prefix="/practice", tags=["practice"])
 
 # Типы практик: asana (исторический дефолт), meditation, pranayama.
 PRACTICE_TYPES = ("asana", "meditation", "pranayama")
-
-
-def require_timer_key(x_timer_key: Optional[str] = Header(default=None)):
-    if not settings.TIMER_BOT_KEY:
-        raise HTTPException(status_code=500, detail="TIMER_BOT_KEY not configured")
-    if x_timer_key != settings.TIMER_BOT_KEY:
-        raise HTTPException(status_code=403, detail="Invalid timer bot key")
-    return True
 
 FREE_REPEATABLE_LIMIT = 3
 
@@ -208,18 +201,23 @@ async def complete_session(
     if session.status != "active":
         raise HTTPException(status_code=400, detail="Session is not active")
 
-    total_seconds = sum(body.asana_durations.values())
+    now = datetime.utcnow()
+    elapsed = max(0, int((now - (session.started_at or now)).total_seconds()))
+    declared = sum(max(0, int(v)) for v in body.asana_durations.values())
+    # Клиенту не доверяем: нельзя «накрутить» минуты больше, чем реально прошло
+    # с начала сессии (+60 с на округление), и не больше TTL сессии.
+    total_seconds = min(declared, elapsed + 60, int(SESSION_TTL.total_seconds()))
 
     session.status = "completed"
     session.asanas_practiced = body.asanas_practiced
     session.asana_durations = body.asana_durations
     session.rest_seconds = body.rest_seconds
     session.total_duration_seconds = total_seconds
-    session.completed_at = datetime.utcnow()
+    session.completed_at = now
 
     user.total_practice_minutes += total_seconds // 60
     today = date.today().isoformat()
-    user.last_practice_at = datetime.utcnow()
+    user.last_practice_at = now
 
     result = await db.execute(
         select(PracticeSession).where(

@@ -101,7 +101,7 @@ async def test_app_receipt_rejected_notifies_client_in_app(client):
     resp = await client.post(
         "/api/v1/payments/receipt",
         data={"payment_method": "Сбербанк", "amount": "499", "contact": "client@test.ru"},
-        files=_files(b"fake-jpeg-bytes"),
+        files=_files(b"\xff\xd8\xff\xe0fake-jpeg-bytes"),
     )
     assert resp.status_code == 200, resp.text
     payment_id = resp.json()["id"]

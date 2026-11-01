@@ -12,6 +12,7 @@ from app.models.models import User, Payment
 from app.services.auth_service import require_user, get_current_user
 from app.services.subscription_service import get_or_create_subscription
 from app.services.notify_service import notify_admin, notify_error
+from app.services.upload_service import save_upload
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
@@ -46,15 +47,7 @@ async def upload_receipt(
     user: User = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ):
-    os.makedirs(RECEIPT_DIR, exist_ok=True)
-    ext = os.path.splitext(file.filename or "receipt.jpg")[1] or ".jpg"
-    filename = f"{uuid.uuid4().hex}{ext}"
-    filepath = os.path.join(RECEIPT_DIR, filename)
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty file")
-    with open(filepath, "wb") as f:
-        f.write(content)
+    filename, _ = await save_upload(file, RECEIPT_DIR, allow_pdf=True, max_mb=10)
 
     url = f"/uploads/receipts/{filename}"
     payment = Payment(

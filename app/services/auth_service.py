@@ -31,13 +31,17 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(user_id: int) -> str:
     expire = datetime.utcnow() + timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
-    to_encode = {"sub": str(user_id), "exp": expire}
+    to_encode = {"sub": str(user_id), "exp": expire, "typ": "access"}
     return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
 def decode_token(token: str) -> Optional[TokenData]:
     try:
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+        # Одноразовые токены (reset/verify) подписаны тем же ключом, но не должны
+        # работать как access-token.
+        if payload.get("purpose"):
+            return None
         user_id = payload.get("sub")
         if user_id is None:
             return None
@@ -191,5 +195,15 @@ async def require_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is deleted",
+        )
+    return user
+
+
+async def require_admin(user: User = Depends(require_user)) -> User:
+    """JWT + is_admin. Общий guard для админских эндпоинтов."""
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin only",
         )
     return user

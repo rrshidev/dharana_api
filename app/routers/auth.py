@@ -4,18 +4,20 @@ from datetime import datetime, timedelta
 from email_validator import EmailNotValidError, validate_email
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
 from app.models.models import User, UserEmail, PendingTelegramAuth
+from app.services.bot_auth import require_bot_key, require_timer_key
 from app.services.auth_service import (
     hash_password,
     verify_password,
     create_access_token,
     require_user,
     get_current_user,
+    get_optional_user,
     create_email_verify_token,
     decode_email_verify_claims,
     create_password_reset_token,
@@ -556,9 +558,24 @@ async def confirm_password_reset(body: PasswordResetConfirmRequest, db: AsyncSes
 
 
 @router.post("/telegram/create-code")
-async def create_telegram_code(body: TelegramLoginRequest, db: AsyncSession = Depends(get_db)):
-    """Bot calls this to create a pending auth code. Also upserts the user in DB."""
+async def create_telegram_code(
+    body: TelegramLoginRequest,
+    _: bool = Depends(require_bot_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bot calls this to create a pending auth code. Also upserts the user in DB.
+
+    Только для бота (X-Bot-Key): код — это фактически одноразовый пароль,
+    публично его отдавать нельзя.
+    """
     code = str(secrets.randbelow(900000) + 100000)
+
+    # Чистим просроченные коды (10 минут), чтобы таблица не росла бесконечно.
+    await db.execute(
+        delete(PendingTelegramAuth).where(
+            PendingTelegramAuth.created_at < datetime.utcnow() - timedelta(minutes=10)
+        )
+    )
 
     # Upsert user by telegram_id
     result = await db.execute(select(User).where(User.telegram_id == body.telegram_id))
@@ -604,7 +621,7 @@ async def create_telegram_code(body: TelegramLoginRequest, db: AsyncSession = De
 async def verify_telegram_code(
     body: TelegramCodeRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User | None = Depends(get_current_user),
+    current_user: User | None = Depends(get_optional_user),
 ):
     """App calls this with the code from the bot to complete login."""
     result = await db.execute(
@@ -683,9 +700,17 @@ async def verify_telegram_code(
     )
 
 
-@router.post("/telegram", response_model=TokenResponse)
-async def telegram_login(body: TelegramLoginRequest, db: AsyncSession = Depends(get_db)):
-    """Direct telegram login (legacy)."""
+@router.post("/telegram")
+async def telegram_login(
+    body: TelegramLoginRequest,
+    _: bool = Depends(require_timer_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Синхронизация пользователя таймер-ботом (legacy).
+
+    Только для таймер-бота (X-Timer-Key). JWT здесь НЕ выдаётся: вход в
+    приложение идёт через create-code + verify.
+    """
     lang = normalize_lang(body.language or "ru")
     result = await db.execute(select(User).where(User.telegram_id == body.telegram_id))
     user = result.scalar_one_or_none()
@@ -713,12 +738,17 @@ async def telegram_login(body: TelegramLoginRequest, db: AsyncSession = Depends(
         await db.refresh(user)
         await notify_new_user(user.name or f"TG #{body.telegram_id}", "telegram")
 
-    token = create_access_token(user.id)
-    return TokenResponse(
-        access_token=token,
-        user={"id": user.id, "email": user.email, "name": user.name, "telegram_id": user.telegram_id,
-              "language": user.language, "timer_language": user.timer_language},
-    )
+    return {
+        "ok": True,
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name,
+            "telegram_id": user.telegram_id,
+            "language": user.language,
+            "timer_language": user.timer_language,
+        },
+    }
 
 
 class TimerLanguageRequest(BaseModel):
@@ -728,6 +758,7 @@ class TimerLanguageRequest(BaseModel):
 @router.get("/telegram/{telegram_id}/language")
 async def get_timer_language(
     telegram_id: int,
+    _: bool = Depends(require_timer_key),
     db: AsyncSession = Depends(get_db),
 ):
     """Язык таймер-бота пользователя: {"language": "ru"|"en"}."""
@@ -742,6 +773,7 @@ async def get_timer_language(
 async def set_timer_language(
     telegram_id: int,
     body: TimerLanguageRequest,
+    _: bool = Depends(require_timer_key),
     db: AsyncSession = Depends(get_db),
 ):
     """Сменить язык таймер-бота для пользователя."""

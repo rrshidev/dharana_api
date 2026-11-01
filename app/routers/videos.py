@@ -5,7 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.models import Video, User, UserSubscription
-from app.services.auth_service import get_current_user
+from app.services.auth_service import get_current_user, require_admin
+from app.services.media_urls import sign_media_url
 from app.services.video_service import video_service
 
 router = APIRouter(prefix="/videos", tags=["videos"])
@@ -45,7 +46,7 @@ async def get_asana_video(
         "asana_name": video.asana_name,
         "is_premium": video.is_premium,
         "accessible": accessible,
-        "video_url": f"/api/v1/media/videos/{video.filepath}" if accessible else None,
+        "video_url": sign_media_url(video.filepath) if accessible else None,
         "message": "Видео из каталога доступно только по подписке Premium" if not accessible else None,
     }
 
@@ -66,7 +67,7 @@ async def list_sequences(
             "name": v.sequence_name,
             "is_premium": v.is_premium,
             "accessible": accessible,
-            "video_url": f"/api/v1/media/videos/{v.filepath}" if accessible else None,
+            "video_url": sign_media_url(v.filepath) if accessible else None,
         })
 
     return result
@@ -100,11 +101,14 @@ async def get_sequence_video(
         "name": video.sequence_name,
         "is_premium": video.is_premium,
         "accessible": True,
-        "video_url": f"/api/v1/media/videos/{video.filepath}",
+        "video_url": sign_media_url(video.filepath),
     }
 
 
 @router.post("/scan")
-async def scan_videos(db: AsyncSession = Depends(get_db)):
+async def scan_videos(
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
     stats = await video_service.scan_and_sync(db)
     return {"ok": True, "stats": stats}

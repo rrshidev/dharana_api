@@ -22,11 +22,14 @@ async def client():
         yield c
 
 
+TIMER_HEADERS = {"X-Timer-Key": "test-timer-bot-key-123"}
+
+
 async def _telegram_login(client, telegram_id=100500, language=None):
     payload = {"telegram_id": telegram_id, "name": "TimerUser", "username": "timeruser"}
     if language is not None:
         payload["language"] = language
-    return await client.post("/api/v1/auth/telegram", json=payload)
+    return await client.post("/api/v1/auth/telegram", json=payload, headers=TIMER_HEADERS)
 
 
 async def test_telegram_login_sets_timer_language_default_ru(client):
@@ -50,36 +53,42 @@ async def test_telegram_login_does_not_overwrite_timer_language(client):
 
 async def test_get_timer_language(client):
     await _telegram_login(client, telegram_id=100504, language="en")
-    r = await client.get("/api/v1/auth/telegram/100504/language")
+    r = await client.get("/api/v1/auth/telegram/100504/language", headers=TIMER_HEADERS)
     assert r.status_code == 200
     assert r.json() == {"language": "en"}
 
 
 async def test_get_timer_language_missing_user(client):
-    r = await client.get("/api/v1/auth/telegram/999999/language")
+    r = await client.get("/api/v1/auth/telegram/999999/language", headers=TIMER_HEADERS)
     assert r.status_code == 404
+
+
+async def test_timer_endpoints_require_key(client):
+    assert (await client.post("/api/v1/auth/telegram", json={"telegram_id": 1})).status_code == 403
+    assert (await client.get("/api/v1/auth/telegram/1/language")).status_code == 403
+    assert (await client.put("/api/v1/auth/telegram/1/language", json={"language": "en"})).status_code == 403
 
 
 async def test_set_timer_language(client):
     await _telegram_login(client, telegram_id=100505, language="ru")
-    r = await client.put("/api/v1/auth/telegram/100505/language", json={"language": "en"})
+    r = await client.put("/api/v1/auth/telegram/100505/language", json={"language": "en"}, headers=TIMER_HEADERS)
     assert r.status_code == 200
     assert r.json() == {"language": "en"}
 
-    r = await client.get("/api/v1/auth/telegram/100505/language")
+    r = await client.get("/api/v1/auth/telegram/100505/language", headers=TIMER_HEADERS)
     assert r.json() == {"language": "en"}
 
 
 async def test_set_timer_language_normalizes(client):
     await _telegram_login(client, telegram_id=100506, language="ru")
-    r = await client.put("/api/v1/auth/telegram/100506/language", json={"language": "EN-US"})
+    r = await client.put("/api/v1/auth/telegram/100506/language", json={"language": "EN-US"}, headers=TIMER_HEADERS)
     assert r.status_code == 200
     assert r.json() == {"language": "en"}
 
-    r = await client.put("/api/v1/auth/telegram/100506/language", json={"language": "fr"})
+    r = await client.put("/api/v1/auth/telegram/100506/language", json={"language": "fr"}, headers=TIMER_HEADERS)
     assert r.json() == {"language": "ru"}
 
 
 async def test_set_timer_language_missing_user(client):
-    r = await client.put("/api/v1/auth/telegram/999999/language", json={"language": "en"})
+    r = await client.put("/api/v1/auth/telegram/999999/language", json={"language": "en"}, headers=TIMER_HEADERS)
     assert r.status_code == 404

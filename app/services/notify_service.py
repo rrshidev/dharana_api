@@ -1,3 +1,4 @@
+import html
 import logging
 import os
 import httpx
@@ -28,14 +29,20 @@ async def notify_admin(message: str):
 
 
 async def notify_new_user(name: str, source: str = "app"):
-    await notify_admin(f"🆕 <b>Новый пользователь</b>\nИмя: {name}\nИсточник: {source}")
+    safe_name = html.escape(str(name), quote=False)
+    safe_source = html.escape(str(source), quote=False)
+    await notify_admin(f"🆕 <b>Новый пользователь</b>\nИмя: {safe_name}\nИсточник: {safe_source}")
 
 
 async def notify_subscription(user_name: str, sub_type: str):
+    safe_name = html.escape(str(user_name), quote=False)
+    safe_type = html.escape(str(sub_type), quote=False)
     await notify_admin(
-        f"💎 <b>Новая подписка</b>\nПользователь: {user_name}\nТип: {sub_type}"
+        f"💎 <b>Новая подписка</b>\nПользователь: {safe_name}\nТип: {safe_type}"
     )
 
 
 async def notify_error(service: str, error: str):
-    await notify_admin(f"🚨 <b>Ошибка {service}</b>\n{error[:500]}")
+    safe_service = html.escape(str(service), quote=False)
+    safe_error = html.escape(str(error)[:500], quote=False)
+    await notify_admin(f"🚨 <b>Ошибка {safe_service}</b>\n{safe_error}")

@@ -55,12 +55,18 @@ def catalog():
 
 
 async def _tg_login(client, telegram_id=910000):
+    """Создать пользователя ботом и получить JWT через create-code + verify."""
+    bot_headers = {"X-Bot-Key": "test-bot-admin-key-123"}
     r = await client.post(
-        "/api/v1/auth/telegram",
+        "/api/v1/auth/telegram/create-code",
         json={"telegram_id": telegram_id, "name": "DayUser", "username": f"dayuser{telegram_id}"},
+        headers=bot_headers,
     )
     assert r.status_code == 200, r.text
-    return r.json()["access_token"]
+    code = r.json()["code"]
+    v = await client.post("/api/v1/auth/telegram/verify", json={"code": code})
+    assert v.status_code == 200, v.text
+    return v.json()["access_token"]
 
 
 def _auth(token):

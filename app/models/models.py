@@ -2,7 +2,7 @@ from datetime import datetime, date, time
 from typing import Optional
 
 from sqlalchemy import (
-    Column, Integer, String, Time, Boolean, DateTime, Date, Text, ForeignKey,
+    Column, Integer, BigInteger, String, Time, Boolean, DateTime, Date, Text, ForeignKey,
     Float, JSON,
 )
 from sqlalchemy.orm import relationship
@@ -15,7 +15,7 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String(255), unique=True, nullable=True, index=True)
-    telegram_id = Column(Integer, unique=True, nullable=True, index=True)
+    telegram_id = Column(BigInteger, unique=True, nullable=True, index=True)
     google_id = Column(String(255), unique=True, nullable=True, index=True)
     vk_id = Column(String(255), unique=True, nullable=True, index=True)
     yandex_id = Column(String(255), unique=True, nullable=True, index=True)
@@ -79,7 +79,7 @@ class DailyAsanaLog(Base):
     __tablename__ = "daily_asana_logs"
 
     id = Column(Integer, primary_key=True)
-    telegram_id = Column(Integer, unique=True, nullable=False, index=True)
+    telegram_id = Column(BigInteger, unique=True, nullable=False, index=True)
     asana_name = Column(String(500), nullable=False)  # Каноническое имя (base_name)
     sent_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -212,7 +212,7 @@ class PendingTelegramAuth(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     code = Column(String(10), unique=True, nullable=False, index=True)
-    telegram_id = Column(Integer, nullable=False)
+    telegram_id = Column(BigInteger, nullable=False)
     telegram_name = Column(String(255), nullable=True)
     telegram_username = Column(String(100), nullable=True)
     user_id = Column(Integer, nullable=True)  # filled when user confirmed
@@ -226,7 +226,7 @@ class Payment(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("app_users.id"), nullable=True)
-    telegram_id = Column(Integer, nullable=True)  # заполняется при оплате через бота
+    telegram_id = Column(BigInteger, nullable=True)  # заполняется при оплате через бота
     user_name = Column(String(255), nullable=True)
     contact = Column(String(500), nullable=True)  # email или tg
 
@@ -278,7 +278,7 @@ class BroadcastDelivery(Base):
     id = Column(Integer, primary_key=True, index=True)
     message_id = Column(Integer, ForeignKey("app_broadcast_messages.id"), nullable=False, index=True)
     user_id = Column(Integer, nullable=False, index=True)
-    telegram_id = Column(Integer, nullable=True)  # только для канала telegram
+    telegram_id = Column(BigInteger, nullable=True)  # только для канала telegram
     channel = Column(String(20), nullable=False)  # telegram | app
 
     # telegram: pending -> sent | failed
