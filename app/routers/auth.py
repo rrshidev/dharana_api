@@ -568,14 +568,35 @@ async def create_telegram_code(
     Только для бота (X-Bot-Key): код — это фактически одноразовый пароль,
     публично его отдавать нельзя.
     """
-    code = str(secrets.randbelow(900000) + 100000)
-
     # Чистим просроченные коды (10 минут), чтобы таблица не росла бесконечно.
     await db.execute(
         delete(PendingTelegramAuth).where(
             PendingTelegramAuth.created_at < datetime.utcnow() - timedelta(minutes=10)
         )
     )
+
+    # Также снимаем старые неиспользованные коды того же telegram_id: один
+    # активный код за раз — иначе можно накапливать их через быстрые вызовы бота.
+    await db.execute(
+        delete(PendingTelegramAuth).where(
+            PendingTelegramAuth.telegram_id == body.telegram_id,
+            PendingTelegramAuth.confirmed == False,
+        )
+    )
+
+    # code UNIQUE: при редком совпадении с ещё живым кодом INSERT упал бы
+    # с 500, поэтому подбираем свободный (заодно не выдаём два одинаковых).
+    for _ in range(10):
+        code = str(secrets.randbelow(900000) + 100000)
+        taken = await db.execute(
+            select(PendingTelegramAuth.id)
+            .where(PendingTelegramAuth.code == code)
+            .limit(1)
+        )
+        if taken.scalar_one_or_none() is None:
+            break
+    else:
+        raise HTTPException(status_code=503, detail="Could not allocate login code")
 
     # Upsert user by telegram_id
     result = await db.execute(select(User).where(User.telegram_id == body.telegram_id))
@@ -624,18 +645,22 @@ async def verify_telegram_code(
     current_user: User | None = Depends(get_optional_user),
 ):
     """App calls this with the code from the bot to complete login."""
+    now = datetime.utcnow()
+    # Просроченные коды не ищем вовсе: единый ответ не даёт отличить
+    # «неверный» от «истёкший», а лишний код не остаётся валидным из-за гонки.
     result = await db.execute(
         select(PendingTelegramAuth).where(
             PendingTelegramAuth.code == body.code,
             PendingTelegramAuth.confirmed == False,
+            PendingTelegramAuth.created_at >= now - timedelta(minutes=10),
         )
     )
     pending = result.scalar_one_or_none()
     if not pending:
         raise HTTPException(status_code=400, detail="Invalid or expired code")
 
-    if datetime.utcnow() - pending.created_at > timedelta(minutes=10):
-        raise HTTPException(status_code=400, detail="Code expired")
+    if now - pending.created_at > timedelta(minutes=10):
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
 
     pending.confirmed = True
 

@@ -50,8 +50,24 @@ def _is_internal(ip: str) -> bool:
         return False
 
 
+def _normalize_path(path: str) -> str:
+    """Канонический путь для правил: без //, без хвостового /.
+
+    Иначе `POST /api/v1/auth/verify/` (Starlette сам редиректит на вариант без
+    слэша) обходил бы лимит, потому что ключ правила — точная строка.
+    """
+    if not path:
+        return "/"
+    while "//" in path:
+        path = path.replace("//", "/")
+    if len(path) > 1 and path.endswith("/"):
+        path = path[:-1]
+    return path
+
+
 def check(method: str, path: str, ip: str) -> Optional[int]:
     """Вернуть Retry-After (сек), если запрос надо отклонить, иначе None."""
+    path = _normalize_path(path)
     rule = RULES.get((method.upper(), path))
     if not rule:
         return None
