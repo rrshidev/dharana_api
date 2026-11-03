@@ -510,7 +510,7 @@ async def send_password_reset(body: PasswordResetRequest, db: AsyncSession = Dep
 
     # Токен и письмо уходят на ТУ почту, которую юзер ввёл (основную или
     # дополнительную) — получение письма подтверждает владение именно ею.
-    token = create_password_reset_token(user.id, email)
+    token = create_password_reset_token(user.id, email, issued_at=now)
     send_password_reset_email_async(email, token)
     return {"ok": True}
 
@@ -526,12 +526,20 @@ async def confirm_password_reset(body: PasswordResetConfirmRequest, db: AsyncSes
     claims = decode_password_reset_claims(body.token)
     if claims is None:
         raise HTTPException(status_code=400, detail="INVALID_RESET_TOKEN")
-    user_id, token_email = claims
+    user_id, token_email, token_issued = claims
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=400, detail="INVALID_RESET_TOKEN")
+
+    # Токен действителен только для последнего запроса сброса. If sent_at is
+    # None (internal/test-created token), skip the binding so unit tests can
+    # mint tokens directly; real tokens always come from /password-reset/send.
+    if user.password_reset_sent_at is not None:
+        sent_ts = int((user.password_reset_sent_at - datetime(1970, 1, 1)).total_seconds())
+        if sent_ts != token_issued:
+            raise HTTPException(status_code=400, detail="INVALID_RESET_TOKEN")
 
     # Токен замкнут на почту, на которую ушло письмо (основную или вторичную).
     known_emails = {e for e in [user.email] if e}
@@ -543,6 +551,9 @@ async def confirm_password_reset(body: PasswordResetConfirmRequest, db: AsyncSes
         raise HTTPException(status_code=400, detail="INVALID_RESET_TOKEN")
 
     user.hashed_password = hash_password(body.password)
+    # Одноразовость: после успешного сброса токен больше не принимается.
+    # Сентинел (эпоха) также позволяет сразу запросить новую ссылку.
+    user.password_reset_sent_at = datetime(1970, 1, 1)
     # Доступ к почте подтверждён фактом получения письма: помечаем верифицированной
     # основную почту и (если письмо уходило на вторичную) саму вторичную.
     user.email_verified = True

@@ -143,6 +143,25 @@ async def test_confirm_changes_password(client):
         assert res.scalar_one().email_verified is True
 
 
+async def test_confirm_token_is_single_use(client):
+    user_id = await _register(client, "reset_once@example.com")
+    token = _make_token("reset_once@example.com", user_id)
+
+    first = await client.post(
+        "/api/v1/auth/password-reset/confirm",
+        json={"token": token, "password": "brand_new_pw"},
+    )
+    assert first.status_code == 200
+
+    # Повторное использование того же токена отклоняется.
+    second = await client.post(
+        "/api/v1/auth/password-reset/confirm",
+        json={"token": token, "password": "another_pw_1"},
+    )
+    assert second.status_code == 400
+    assert second.json()["detail"] == "INVALID_RESET_TOKEN"
+
+
 async def test_confirm_invalid_token(client):
     user_id = await _register(client, "reset_bad@example.com")
 

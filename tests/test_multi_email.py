@@ -90,7 +90,7 @@ async def test_reset_via_secondary_alias_sets_password(client):
     from sqlalchemy import select
 
     from app.database import async_session
-    from app.models.models import UserEmail
+    from app.models.models import User, UserEmail
     from app.services.auth_service import create_password_reset_token
 
     uid = await _register(client, "resetalias@example.com")
@@ -102,7 +102,10 @@ async def test_reset_via_secondary_alias_sets_password(client):
     )
     assert r.status_code == 200
 
-    token = create_password_reset_token(uid, "resetalias2@example.com")
+    # Токен привязан к времени запроса (User.password_reset_sent_at).
+    async with async_session() as s:
+        sent_at = (await s.execute(select(User).where(User.id == uid))).scalar_one().password_reset_sent_at
+    token = create_password_reset_token(uid, "resetalias2@example.com", issued_at=sent_at)
     confirm = await client.post(
         "/api/v1/auth/password-reset/confirm",
         json={"token": token, "password": "brand_new_pw"},

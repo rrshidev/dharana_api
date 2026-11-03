@@ -93,20 +93,38 @@ def decode_email_verify_claims(token: str) -> Optional[tuple[int, str]]:
         return None
 
 
-def create_password_reset_token(user_id: int, email: str) -> str:
-    """Одноразовый токен сброса пароля (30 мин, с email-замком)."""
-    expire = datetime.utcnow() + timedelta(minutes=30)
+_EPOCH = datetime(1970, 1, 1)
+
+
+def _utc_ts(value: datetime) -> int:
+    """Unix-время для naive-UTC даты (как хранит БД) без локальной TZ."""
+    return int((value - _EPOCH).total_seconds())
+
+
+def create_password_reset_token(
+    user_id: int,
+    email: str,
+    issued_at: Optional[datetime] = None,
+) -> str:
+    """Одноразовый токен сброса пароля (30 мин, с email-замком).
+
+    `prs` привязывает токен к конкретному запросу (`User.password_reset_sent_at`):
+    после успешного сброса или нового запроса старый токен становится невалидным.
+    """
+    issued = issued_at or datetime.utcnow()
+    expire = issued + timedelta(minutes=30)
     to_encode = {
         "sub": str(user_id),
         "purpose": "password_reset",
         "email": email,
+        "prs": _utc_ts(issued),
         "exp": expire,
     }
     return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
-def decode_password_reset_claims(token: str) -> Optional[tuple[int, str]]:
-    """Проверка подписи/срока/purpose/email-замка. Возвращает (user_id, email)."""
+def decode_password_reset_claims(token: str) -> Optional[tuple[int, str, int]]:
+    """Проверка подписи/срока/purpose/email-замка. Возвращает (user_id, email, issued_ts)."""
     try:
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
     except jwt.PyJWTError:
@@ -115,7 +133,7 @@ def decode_password_reset_claims(token: str) -> Optional[tuple[int, str]]:
         return None
     email = payload.get("email")
     try:
-        return (int(payload["sub"]), str(email))
+        return (int(payload["sub"]), str(email), int(payload["prs"]))
     except (KeyError, TypeError, ValueError):
         return None
 
