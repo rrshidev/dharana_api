@@ -9,6 +9,13 @@
 #    and response body (never the token/URL) so transient DNS/network errors
 #    are visible instead of a bare "sendDocument failed"
 #  - dump is validated with pg_restore --list before it is shipped
+#  - archive (DB dump, uploads, .env, TLS keys) is AES-256 encrypted before it
+#    is written to disk or sent to Telegram. Passphrase lives only in
+#    /opt/dharana/backup/.backup-pass (root, 600) - store a copy offline.
+#
+# Restore: openssl enc -d -aes-256-cbc -pbkdf2 -in dharana_backup_<ts>.tar.gz.enc \
+#            -out dharana_backup_<ts>.tar.gz -pass file:/opt/dharana/backup/.backup-pass
+#          tar -xzf dharana_backup_<ts>.tar.gz
 
 set -uo pipefail
 # Archives contain .env and TLS private keys: never let them be group/world-readable.
@@ -23,6 +30,7 @@ TG_API="https://api.telegram.org/bot"
 TS=$(date +%Y%m%d_%H%M%S)
 ARCHIVE="$BACKUP_DIR/dharana_backup_$TS.tar.gz"
 STAGING="/tmp/dharana_backup_$TS"
+PASS_FILE="/opt/dharana/backup/.backup-pass"
 
 BOT_TOKEN=$(grep -E '^BOT_TOKEN=' "$ENV_FILE" | head -1 | cut -d= -f2-)
 ADMIN_TG_ID=$(grep -E '^ADMIN_TELEGRAM_ID=' "$ENV_FILE" | head -1 | cut -d= -f2-)
@@ -35,6 +43,12 @@ if [ -f "$LOG_FILE" ] && [ "$(stat -c%s "$LOG_FILE")" -gt 5242880 ]; then
 fi
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
+
+if [ ! -s "$PASS_FILE" ]; then
+  ( umask 077; openssl rand -base64 48 > "$PASS_FILE" ) || { echo "cannot create $PASS_FILE" >&2; exit 1; }
+  chmod 600 "$PASS_FILE"
+  log "generated backup encryption passphrase at $PASS_FILE - store it offline"
+fi
 
 # One backup at a time (cron + manual run).
 exec 9>"/opt/dharana/backups/.backup.lock"
@@ -115,8 +129,15 @@ fi
 tar --ignore-failed-read --warning=no-file-changed -czf "$ARCHIVE" -C "$STAGING" . 2>> "$LOG_FILE" \
   || fail "tar failed"
 
+# --- encrypt (archive contains .env, DB dump and TLS private keys) ---
+ENC="$ARCHIVE.enc"
+openssl enc -aes-256-cbc -pbkdf2 -salt -in "$ARCHIVE" -out "$ENC" -pass "file:$PASS_FILE" 2>> "$LOG_FILE" \
+  || fail "archive encryption failed"
+rm -f "$ARCHIVE"
+ARCHIVE="$ENC"
+
 # --- rotate ---
-ls -1t "$BACKUP_DIR"/dharana_backup_*.tar.gz 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -f
+ls -1t "$BACKUP_DIR"/dharana_backup_*.tar.gz* 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -f
 
 # --- send ---
 SIZE_MB=$(( $(stat -c%s "$ARCHIVE") / 1024 / 1024 ))
