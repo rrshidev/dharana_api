@@ -11,6 +11,8 @@
 #  - dump is validated with pg_restore --list before it is shipped
 
 set -uo pipefail
+# Archives contain .env and TLS private keys: never let them be group/world-readable.
+umask 077
 
 ENV_FILE="/opt/dharana/.env"
 BACKUP_DIR="/opt/dharana/backups/daily"
