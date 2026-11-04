@@ -1,4 +1,5 @@
 """Генератор практики: структура последовательности и лимиты генераций."""
+from tests.support import TEST_PASSWORD
 
 import os
 from datetime import datetime, timedelta
@@ -51,7 +52,7 @@ def _setup_catalog():
 async def _register(client, email: str) -> str:
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": email, "password": "secret123", "name": "Gen", "website": ""},
+        json={"email": email, "password": TEST_PASSWORD, "name": "Gen", "website": ""},
     )
     assert r.status_code == 201
     return r.json()["access_token"]

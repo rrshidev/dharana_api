@@ -4,6 +4,7 @@
 дополнительной почте; неверифицированная дверью не считается. Почта должна
 быть уникальна глобально (включая вторичные) — нельзя занять чужой адрес.
 """
+from tests.support import TEST_PASSWORD
 
 import pytest
 
@@ -26,7 +27,7 @@ async def client():
         yield c
 
 
-async def _register(client, email, password="secret123"):
+async def _register(client, email, password=TEST_PASSWORD):
     r = await client.post(
         "/api/v1/auth/register",
         json={"email": email, "password": password, "name": "R", "website": ""},
@@ -50,7 +51,7 @@ async def test_login_via_verified_secondary_alias(client):
 
     r = await client.post(
         "/api/v1/auth/login",
-        json={"email": "alias@example.com", "password": "secret123"},
+        json={"email": "alias@example.com", "password": TEST_PASSWORD},
     )
     assert r.status_code == 200, r.text
     assert r.json()["user"]["id"] == uid
@@ -58,7 +59,7 @@ async def test_login_via_verified_secondary_alias(client):
     # Вход по основной по-прежнему работает.
     r2 = await client.post(
         "/api/v1/auth/login",
-        json={"email": "primary@example.com", "password": "secret123"},
+        json={"email": "primary@example.com", "password": TEST_PASSWORD},
     )
     assert r2.status_code == 200
 
@@ -69,7 +70,7 @@ async def test_unverified_secondary_is_not_a_login_door(client):
 
     r = await client.post(
         "/api/v1/auth/login",
-        json={"email": "ghost@example.com", "password": "secret123"},
+        json={"email": "ghost@example.com", "password": TEST_PASSWORD},
     )
     assert r.status_code == 401
 
@@ -80,7 +81,7 @@ async def test_register_rejects_occupied_secondary_email(client):
 
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": "taken@example.com", "password": "secret123", "name": "X", "website": ""},
+        json={"email": "taken@example.com", "password": TEST_PASSWORD, "name": "X", "website": ""},
     )
     assert r.status_code == 400
     assert r.json()["detail"] == "Email already registered"

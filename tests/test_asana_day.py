@@ -5,6 +5,7 @@
 - /profile: daily_asana_enabled / daily_asana_time / timezone / language
   с валидацией формата бота ("HH:MM", "UTC+3").
 """
+from tests.support import BOT_KEY
 
 from datetime import datetime, timedelta
 
@@ -56,7 +57,7 @@ def catalog():
 
 async def _tg_login(client, telegram_id=910000):
     """Создать пользователя ботом и получить JWT через create-code + verify."""
-    bot_headers = {"X-Bot-Key": "test-bot-admin-key-123"}
+    bot_headers = {"X-Bot-Key": BOT_KEY}
     r = await client.post(
         "/api/v1/auth/telegram/create-code",
         json={"telegram_id": telegram_id, "name": "DayUser", "username": f"dayuser{telegram_id}"},

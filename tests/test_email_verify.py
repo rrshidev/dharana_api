@@ -1,4 +1,5 @@
 """Флоу ненавязчивой верификации email: токен, повторная отправка (rate-limit)."""
+from tests.support import TEST_PASSWORD
 
 import pytest
 
@@ -26,7 +27,7 @@ async def test_register_creates_unverified_user(client):
         "/api/v1/auth/register",
         json={
             "email": "verify_me@example.com",
-            "password": "secret123",
+            "password": TEST_PASSWORD,
             "name": "Verifier",
             "website": "",
         },
@@ -51,7 +52,7 @@ async def test_verify_email_flow(client):
 
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": "verify_ok@example.com", "password": "secret123", "name": "T", "website": ""},
+        json={"email": "verify_ok@example.com", "password": TEST_PASSWORD, "name": "T", "website": ""},
     )
     user_id = r.json()["user"]["id"]
 
@@ -81,7 +82,7 @@ async def test_verify_email_flow(client):
 async def test_verify_token_email_lock(client):
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": "lock_a@example.com", "password": "secret123", "name": "A", "website": ""},
+        json={"email": "lock_a@example.com", "password": TEST_PASSWORD, "name": "A", "website": ""},
     )
     user_id = r.json()["user"]["id"]
 
@@ -97,7 +98,7 @@ async def test_verify_token_email_lock(client):
 async def test_resend_rate_limit(client):
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": "resend@example.com", "password": "secret123", "name": "R", "website": ""},
+        json={"email": "resend@example.com", "password": TEST_PASSWORD, "name": "R", "website": ""},
     )
     token = r.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}

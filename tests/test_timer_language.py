@@ -1,5 +1,6 @@
 """Язык таймер-бота (@timerasana_bot): POST /auth/telegram сохраняет timer_language,
 GET/PUT /auth/telegram/{id}/language читают и меняют его."""
+from tests.support import TIMER_KEY
 
 import pytest
 
@@ -22,7 +23,7 @@ async def client():
         yield c
 
 
-TIMER_HEADERS = {"X-Timer-Key": "test-timer-bot-key-123"}
+TIMER_HEADERS = {"X-Timer-Key": TIMER_KEY}
 
 
 async def _telegram_login(client, telegram_id=100500, language=None):

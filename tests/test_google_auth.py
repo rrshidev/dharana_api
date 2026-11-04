@@ -1,4 +1,5 @@
 """Google Sign-In (POST /auth/google) — флоу и валидация."""
+from tests.support import TEST_PASSWORD
 
 import pytest
 
@@ -87,7 +88,7 @@ async def test_google_links_existing_email_user(client, gh):
     # Пользователь сначала зарегистрировался по email...
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": "google.user@gmail.com", "password": "secret123", "name": "Old Name", "website": ""},
+        json={"email": "google.user@gmail.com", "password": TEST_PASSWORD, "name": "Old Name", "website": ""},
     )
     assert r.status_code == 201
     uid = r.json()["user"]["id"]

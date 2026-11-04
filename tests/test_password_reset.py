@@ -1,4 +1,5 @@
 """Флоу сброса пароля: запрос по email, rate-limit, анти-энумерация, смена пароля."""
+from tests.support import TEST_PASSWORD
 
 import pytest
 
@@ -21,7 +22,7 @@ async def client():
         yield c
 
 
-async def _register(client, email="reset@example.com", password="secret123"):
+async def _register(client, email="reset@example.com", password=TEST_PASSWORD):
     r = await client.post(
         "/api/v1/auth/register",
         json={"email": email, "password": password, "name": "R", "website": ""},
@@ -127,7 +128,7 @@ async def test_confirm_changes_password(client):
     # Старый пароль больше не работает, новый — работает.
     old = await client.post(
         "/api/v1/auth/login",
-        json={"email": "reset_change@example.com", "password": "secret123"},
+        json={"email": "reset_change@example.com", "password": TEST_PASSWORD},
     )
     assert old.status_code == 401
 

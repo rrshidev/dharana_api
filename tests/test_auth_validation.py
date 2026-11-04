@@ -1,4 +1,5 @@
 """Валидация регистрации: пароль, формат email, одноразовые домены, honeypot."""
+from tests.support import TEST_PASSWORD
 
 import pytest
 
@@ -24,7 +25,7 @@ async def client():
 async def _register(client, **overrides):
     payload = {
         "email": "new_user@example.com",
-        "password": "secret123",
+        "password": TEST_PASSWORD,
         "name": "Tester",
         "website": "",
     }
@@ -39,7 +40,7 @@ async def test_register_ok(client):
 
 
 async def test_password_too_short(client):
-    r = await _register(client, password="qwerty7")
+    r = await _register(client, password="x" * 7)
     assert r.status_code == 400
     assert r.json()["detail"] == "PASSWORD_TOO_SHORT"
 
@@ -59,7 +60,7 @@ async def test_name_too_long(client):
 async def test_name_trimmed_on_register(client):
     payload = {
         "email": "trim_name@example.com",
-        "password": "secret123",
+        "password": TEST_PASSWORD,
         "name": "  Иван Петров  ",
         "website": "",
     }

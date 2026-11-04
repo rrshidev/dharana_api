@@ -1,5 +1,6 @@
 """Безопасность входа через Telegram-бота: код только у бота, одноразовый,
 с TTL, без утечки «неверный/просроченный», плюс нормализация путей в лимитере."""
+from tests.support import BOT_KEY
 
 from datetime import datetime, timedelta
 
@@ -24,7 +25,7 @@ async def client():
         yield c
 
 
-BOT_HEADERS = {"X-Bot-Key": "test-bot-admin-key-123"}
+BOT_HEADERS = {"X-Bot-Key": BOT_KEY}
 
 
 async def _create_code(client, telegram_id=800001, name="TG User"):
