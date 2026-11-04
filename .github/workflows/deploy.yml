@@ -52,7 +52,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Package sources
-        run: tar -czf dharana-api.tar.gz app migrations alembic.ini Dockerfile requirements.txt pytest.ini tools
+        run: tar -czf dharana-api.tar.gz app migrations alembic.ini Dockerfile requirements.txt pytest.ini tools deploy
 
       - name: Copy to server
         uses: appleboy/scp-action@v0.1.7
@@ -77,6 +77,8 @@ jobs:
             set -e
             cd /opt/dharana
             sudo tar -xzf /tmp/dharana_deploy_${{ github.run_id }}/dharana-api.tar.gz -C ./dharana-api
+            # Daily backup script lives in the repo; keep the cron copy in sync.
+            sudo install -m 755 ./dharana-api/deploy/backup.sh /opt/dharana/backup/backup.sh
             sudo docker compose build dharana-api
             sudo docker compose run --rm --no-deps dharana-api alembic upgrade head
             sudo docker compose up -d dharana-api
