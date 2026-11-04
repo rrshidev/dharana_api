@@ -78,7 +78,9 @@ jobs:
             cd /opt/dharana
             sudo tar -xzf /tmp/dharana_deploy_${{ github.run_id }}/dharana-api.tar.gz -C ./dharana-api
             # Daily backup script lives in the repo; keep the cron copy in sync.
-            sudo install -m 755 ./dharana-api/deploy/backup.sh /opt/dharana/backup/backup.sh
+            # `deploy` has NOPASSWD only for tar/docker, so extract the script with tar
+            # (the file is mode 755 in git) instead of running sudo install.
+            sudo tar -xzf /tmp/dharana_deploy_${{ github.run_id }}/dharana-api.tar.gz -C /opt/dharana/backup --strip-components=1 deploy/backup.sh
             sudo docker compose build dharana-api
             sudo docker compose run --rm --no-deps dharana-api alembic upgrade head
             sudo docker compose up -d dharana-api
