@@ -187,16 +187,34 @@ class AsanaService:
 
         return {"total": total, "items": items, "limit": limit, "offset": offset}
 
-    def get_asana_detail(self, asana_name: str, lang: Optional[str] = None) -> Optional[Dict]:
-        categories = self._get_categories()
-        category_id = None
-        for cat_key, asana_names in categories.items():
-            if asana_name in asana_names:
-                category_id = cat_key
-                break
+    def resolve_asana_name(self, asana_name: str) -> Optional[tuple[str, str]]:
+        """Находит (каноническое имя, категория) без учёта регистра/пробелов.
 
-        if category_id is None:
+        Имена асан — это имена файлов каталога, поэтому URL вида
+        ``/asana/СКРУТКА%20ЛЕЖА`` должен находить ``Скрутка лежа``. Возвращаем
+        каноническое имя, чтобы страница могла сделать постоянный редирект.
+        """
+        target = (asana_name or "").strip()
+        if not target:
             return None
+
+        categories = self._get_categories()
+        for cat_key, asana_names in categories.items():
+            if target in asana_names:
+                return target, cat_key
+
+        folded = target.casefold()
+        for cat_key, asana_names in categories.items():
+            for name in asana_names:
+                if name.casefold() == folded:
+                    return name, cat_key
+        return None
+
+    def get_asana_detail(self, asana_name: str, lang: Optional[str] = None) -> Optional[Dict]:
+        resolved = self.resolve_asana_name(asana_name)
+        if resolved is None:
+            return None
+        asana_name, category_id = resolved
 
         description = self._read_description(category_id, asana_name, lang)
 

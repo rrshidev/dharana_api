@@ -135,6 +135,14 @@ def test_search_by_localized_names(catalog):
     assert catalog in [a["name"] for a in res_ru["items"]]
 
 
+def test_asana_name_is_case_insensitive(catalog):
+    for variant in ("тестасана", "ТЕСТАСАНА", f"  {catalog}  "):
+        detail = asana_service.get_asana_detail(variant, "ru")
+        assert detail is not None, variant
+        assert detail["name"] == catalog  # каноническое имя из каталога
+    assert asana_service.get_asana_detail("нет такой асаны", "ru") is None
+
+
 def test_generate_sequence_localized(catalog):
     from app.services.sequence_generator import sequence_generator
 
