@@ -225,6 +225,12 @@ async def merge_users(db: AsyncSession, source: User, target: User) -> dict:
             setattr(target, field, getattr(source, field))
             summary["profile"].append(field)
 
+    # Согласие на обработку ПД: не теряем доказательство при слиянии.
+    if target.consent_at is None and source.consent_at is not None:
+        target.consent_at = source.consent_at
+        target.consent_version = source.consent_version
+        summary["profile"].append("consent")
+
     # Права и статусы: админ не должен «умирать» при слиянии его учёток,
     # а бан — переживать слияние (нельзя сбросить бан, слившись с другим).
     if source.is_admin and not target.is_admin:

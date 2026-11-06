@@ -58,6 +58,11 @@ class User(Base):
     # Сброс пароля: когда последний раз слали письмо (rate-limit 1/мин).
     password_reset_sent_at = Column(DateTime, nullable=True)
 
+    # Согласие на обработку персональных данных: когда и с какой версией
+    # документов пользователь согласился (доказательство по 152-ФЗ).
+    consent_at = Column(DateTime, nullable=True)
+    consent_version = Column(String(20), nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

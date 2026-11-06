@@ -30,7 +30,7 @@ async def client():
 async def _register(client, email, password=TEST_PASSWORD):
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": email, "password": password, "name": "R", "website": ""},
+        json={"email": email, "password": password, "name": "R", "website": "", "consent": True},
     )
     assert r.status_code == 201, r.text
     return r.json()["user"]["id"]
@@ -81,7 +81,7 @@ async def test_register_rejects_occupied_secondary_email(client):
 
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": "taken@example.com", "password": TEST_PASSWORD, "name": "X", "website": ""},
+        json={"email": "taken@example.com", "password": TEST_PASSWORD, "name": "X", "website": "", "consent": True},
     )
     assert r.status_code == 400
     assert r.json()["detail"] == "Email already registered"

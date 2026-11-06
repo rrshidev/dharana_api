@@ -38,6 +38,19 @@ from app.services.asana_service import normalize_lang
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# Версия документов, с которой соглашается пользователь. Держим в синхроне с
+# LEGAL.version на сайте (dharana_web_app/lib/legal/config.ts) и в приложении
+# (dharana_app/lib/core/legal/legal_links.dart).
+CURRENT_CONSENT_VERSION = "1.0"
+
+
+def _consent_fields(version: str | None = None) -> dict:
+    """Отметка о согласии на обработку персональных данных для нового юзера."""
+    return {
+        "consent_at": datetime.utcnow(),
+        "consent_version": (version or CURRENT_CONSENT_VERSION)[:20],
+    }
+
 
 async def _find_user_by_email(db: AsyncSession, email: str):
     """Юзер по почте-«двери»: основной или верифицированной дополнительной.
@@ -92,6 +105,9 @@ class RegisterRequest(BaseModel):
     password: str
     name: str
     website: str = ""  # honeypot: скрытое поле для ботов
+    consent: bool = False
+    # Версия документов, которую видел пользователь (клиент присылает свою).
+    consent_version: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -170,6 +186,10 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     if body.website:
         raise HTTPException(status_code=400, detail="SPAM")
 
+    # Без явного согласия персональные данные не обрабатываем (152-ФЗ).
+    if not body.consent:
+        raise HTTPException(status_code=400, detail="CONSENT_REQUIRED")
+
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="PASSWORD_TOO_SHORT")
     if len(body.password) > 128:
@@ -206,6 +226,7 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
         email=email,
         hashed_password=hash_password(body.password),
         name=name,
+        **_consent_fields(body.consent_version),
     )
     db.add(user)
     await db.commit()
@@ -274,6 +295,9 @@ async def _finish_social_login(
             name=name or fallback_name,
             avatar_url=avatar_url,
             email_verified=True if email else False,  # почту уже проверил провайдер
+            # Вход через соцсеть сопровождается юридической плашкой на экране
+            # входа: продолжая, пользователь принимает документы.
+            **_consent_fields(),
         )
         setattr(user, provider_field, provider_id)
         db.add(user)
@@ -619,6 +643,8 @@ async def create_telegram_code(
             name=body.name,
             username=body.username,
             language=(body.language or "ru"),
+            # /start бота предупреждает о сборе Telegram ID, имени и username.
+            **_consent_fields(),
         )
         db.add(user)
         is_new = True
@@ -714,6 +740,7 @@ async def verify_telegram_code(
                 telegram_id=pending.telegram_id,
                 name=pending.telegram_name,
                 username=pending.telegram_username,
+                **_consent_fields(),
             )
             db.add(user)
             await db.flush()
@@ -768,6 +795,7 @@ async def telegram_login(
             username=body.username,
             language=lang,
             timer_language=lang,
+            **_consent_fields(),
         )
         db.add(user)
         await db.commit()

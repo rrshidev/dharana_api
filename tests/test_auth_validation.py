@@ -28,6 +28,7 @@ async def _register(client, **overrides):
         "password": TEST_PASSWORD,
         "name": "Tester",
         "website": "",
+        "consent": True,
     }
     payload.update(overrides)
     return await client.post("/api/v1/auth/register", json=payload)
@@ -37,6 +38,12 @@ async def test_register_ok(client):
     r = await _register(client)
     assert r.status_code == 201
     assert "access_token" in r.json()
+
+
+async def test_register_requires_consent(client):
+    r = await _register(client, consent=False)
+    assert r.status_code == 400
+    assert r.json()["detail"] == "CONSENT_REQUIRED"
 
 
 async def test_password_too_short(client):
@@ -63,6 +70,7 @@ async def test_name_trimmed_on_register(client):
         "password": TEST_PASSWORD,
         "name": "  Иван Петров  ",
         "website": "",
+        "consent": True,
     }
     r = await client.post("/api/v1/auth/register", json=payload)
     assert r.status_code == 201

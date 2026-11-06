@@ -30,6 +30,7 @@ async def test_register_creates_unverified_user(client):
             "password": TEST_PASSWORD,
             "name": "Verifier",
             "website": "",
+            "consent": True,
         },
     )
     assert r.status_code == 201
@@ -52,7 +53,7 @@ async def test_verify_email_flow(client):
 
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": "verify_ok@example.com", "password": TEST_PASSWORD, "name": "T", "website": ""},
+        json={"email": "verify_ok@example.com", "password": TEST_PASSWORD, "name": "T", "website": "", "consent": True},
     )
     user_id = r.json()["user"]["id"]
 
@@ -82,7 +83,7 @@ async def test_verify_email_flow(client):
 async def test_verify_token_email_lock(client):
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": "lock_a@example.com", "password": TEST_PASSWORD, "name": "A", "website": ""},
+        json={"email": "lock_a@example.com", "password": TEST_PASSWORD, "name": "A", "website": "", "consent": True},
     )
     user_id = r.json()["user"]["id"]
 
@@ -98,7 +99,7 @@ async def test_verify_token_email_lock(client):
 async def test_resend_rate_limit(client):
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": "resend@example.com", "password": TEST_PASSWORD, "name": "R", "website": ""},
+        json={"email": "resend@example.com", "password": TEST_PASSWORD, "name": "R", "website": "", "consent": True},
     )
     token = r.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}

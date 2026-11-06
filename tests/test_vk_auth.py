@@ -110,7 +110,7 @@ async def test_vk_same_user_second_login(client, vk):
 async def test_vk_links_existing_email_user(client, vk):
     r = await client.post(
         "/api/v1/auth/register",
-        json={"email": "vk.user@mail.ru", "password": TEST_PASSWORD, "name": "Old Name", "website": ""},
+        json={"email": "vk.user@mail.ru", "password": TEST_PASSWORD, "name": "Old Name", "website": "", "consent": True},
     )
     assert r.status_code == 201
     uid = r.json()["user"]["id"]
