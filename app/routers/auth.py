@@ -41,7 +41,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # Версия документов, с которой соглашается пользователь. Держим в синхроне с
 # LEGAL.version на сайте (dharana_web_app/lib/legal/config.ts) и в приложении
 # (dharana_app/lib/core/legal/legal_links.dart).
-CURRENT_CONSENT_VERSION = "1.0"
+CURRENT_CONSENT_VERSION = "1.1"
 
 
 def _consent_fields(version: str | None = None) -> dict:
