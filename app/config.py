@@ -30,6 +30,20 @@ class Settings(BaseSettings):
     BOT_ADMIN_KEY: str = ""
     TIMER_BOT_KEY: str = ""
 
+    # MAX (МАКС) — мессенджер. OAuth для сторонних сайтов у MAX нет: вход идёт
+    # через мини-приложение бота (подписанный initData), поэтому нужны токен и
+    # никнейм бота. Пустые значения = вход через MAX выключен.
+    MAX_BOT_TOKEN: str = ""
+    MAX_BOT_NAME: str = ""
+    # Куда MAX открывает мини-приложение (настраивается в карточке бота).
+    MAX_MINIAPP_URL: str = "https://dharana.ru/ru/max/login"
+    # Ключ служебных эндпоинтов MAX-бота (заголовок X-Max-Bot-Key).
+    MAX_BOT_KEY: str = ""
+    # Секрет вебхука: MAX присылает его в X-Max-Bot-Api-Secret.
+    MAX_WEBHOOK_SECRET: str = ""
+    # Сколько живёт сессия входа (мини-приложение должно успеть подтвердить).
+    MAX_SESSION_TTL_MINUTES: int = 10
+
     # Проверка доставляемости почты (DNS MX) при регистрации. Отключать
     # только в тестах/изолированных средах без внешнего DNS.
     EMAIL_DELIVERABILITY_CHECK: bool = True
@@ -50,7 +64,8 @@ class Settings(BaseSettings):
     GOOGLE_ANDROID_CLIENT_ID: str = ""
 
     # VK ID (https://id.vk.com) — Client ID/Secret из VK ID Console.
-    # Отдельного OAuth у MAX нет: кнопка «через MAX» использует этот же вход.
+    # Это отдельный провайдер: MAX не выдаёт OAuth-токены для сторонних сайтов,
+    # вход через MAX работает через мини-приложение (см. MAX_* ниже).
     VK_CLIENT_ID: str = ""
     VK_CLIENT_SECRET: str = ""
 

@@ -35,10 +35,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest pytest-asyncio
+          pip install -r requirements.txt -r maxbot/requirements.txt pytest pytest-asyncio
 
       - name: Run tests
-        run: pytest -q
+        run: |
+          pytest -q
+          pytest -q maxbot/tests
 
   deploy:
     name: Deploy to VPS
@@ -52,7 +54,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Package sources
-        run: tar -czf dharana-api.tar.gz app migrations alembic.ini Dockerfile requirements.txt pytest.ini tools deploy
+        run: tar -czf dharana-api.tar.gz app migrations alembic.ini Dockerfile requirements.txt pytest.ini tools deploy maxbot
 
       - name: Copy to server
         uses: appleboy/scp-action@v0.1.7
@@ -98,6 +100,19 @@ jobs:
             if [ "$code" != "422" ]; then
               echo "::error::POST /auth/yandex вернул $code вместо 422 — новый код не развернулся?"
               exit 1
+            fi
+
+            # MAX-бот появится в compose только после разовой настройки сервера
+            # (env MAX_*, сервис maxbot, маршрут Caddy). До этого деплой API
+            # не должен падать из-за отсутствующего сервиса.
+            if sudo docker compose config --services | grep -qx maxbot; then
+              sudo docker compose build maxbot
+              sudo docker compose up -d maxbot
+              sleep 5
+              curl -fsS http://localhost:8081/health > /dev/null
+              echo "maxbot deploy OK"
+            else
+              echo "maxbot: сервис не описан в /opt/dharana/docker-compose.yml — пропуск"
             fi
 
             set +e

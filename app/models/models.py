@@ -16,6 +16,9 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String(255), unique=True, nullable=True, index=True)
     telegram_id = Column(BigInteger, unique=True, nullable=True, index=True)
+    # MAX (МАКС): id пользователя мессенджера. Вход — только через мини-приложение
+    # бота (подписанный initData), отдельного OAuth у MAX нет.
+    max_id = Column(BigInteger, unique=True, nullable=True, index=True)
     google_id = Column(String(255), unique=True, nullable=True, index=True)
     vk_id = Column(String(255), unique=True, nullable=True, index=True)
     yandex_id = Column(String(255), unique=True, nullable=True, index=True)
@@ -223,6 +226,37 @@ class PendingTelegramAuth(Base):
     user_id = Column(Integer, nullable=True)  # filled when user confirmed
     created_at = Column(DateTime, default=datetime.utcnow)
     confirmed = Column(Boolean, default=False)
+
+
+class PendingMaxAuth(Base):
+    """Сессия входа через мини-приложение MAX.
+
+    Поток: сайт/приложение создаёт сессию → открывает
+    ``https://max.ru/<botName>?startapp=login_<session_id>`` → мини-приложение
+    присылает подписанный initData на ``/auth/max/confirm`` → исходный клиент
+    забирает JWT поллингом ``/auth/max/session/<session_id>``.
+
+    Код в чат не отправляется: MAX запрещает авторизационные сообщения через
+    API (п. 1.5 Требований к содержанию и функциональности Приложений).
+    """
+
+    __tablename__ = "app_pending_max_auth"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(64), unique=True, nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="pending")  # pending | confirmed | consumed
+    # Заполнен, когда MAX привязывают к уже открытой сессии (не вход, а линковка).
+    user_id = Column(Integer, nullable=True)
+    max_id = Column(BigInteger, nullable=True)
+    max_name = Column(String(255), nullable=True)
+    max_username = Column(String(100), nullable=True)
+    max_avatar_url = Column(String(500), nullable=True)
+    max_language = Column(String(10), nullable=True)
+    # Согласие, зафиксированное в момент создания сессии (доказательство по 152-ФЗ).
+    consent_version = Column(String(20), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    confirmed_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=False)
 
 
 class Payment(Base):

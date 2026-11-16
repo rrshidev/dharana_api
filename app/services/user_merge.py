@@ -31,10 +31,11 @@ from app.models.models import (
     Payment,
     BroadcastDelivery,
     PendingTelegramAuth,
+    PendingMaxAuth,
 )
 
 # Поля внешних идентификаторов, на которых стоят UNIQUE-ограничения.
-_UNIQUE_FIELDS = ("email", "username", "telegram_id", "google_id", "vk_id", "yandex_id")
+_UNIQUE_FIELDS = ("email", "username", "telegram_id", "max_id", "google_id", "vk_id", "yandex_id")
 
 # Текстовые/настроечные поля профиля: заполняем у target только пустые.
 _PROFILE_FIELDS = (
@@ -99,6 +100,7 @@ async def merge_users(db: AsyncSession, source: User, target: User) -> dict:
         (Payment, Payment.user_id, "payments"),
         (BroadcastDelivery, BroadcastDelivery.user_id, "deliveries"),
         (PendingTelegramAuth, PendingTelegramAuth.user_id, "pending"),
+        (PendingMaxAuth, PendingMaxAuth.user_id, "pending"),
     ):
         result = await db.execute(
             table.__table__.update().where(key == source.id).values(user_id=target.id)

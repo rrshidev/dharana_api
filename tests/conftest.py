@@ -3,7 +3,7 @@
 Ставит изолированную тестовую SQLite-базу и ключи ДО импорта приложения,
 чтобы все тест-модули использовали один временный каталог/БД.
 """
-from tests.support import BOT_KEY, JWT_SECRET, TIMER_KEY
+from tests.support import BOT_KEY, JWT_SECRET, MAX_KEY, TIMER_KEY
 
 import os
 import tempfile
@@ -12,6 +12,9 @@ _TMP = tempfile.mkdtemp(prefix="dharana_test_")
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{os.path.join(_TMP, 'test.db')}"
 os.environ["BOT_ADMIN_KEY"] = BOT_KEY
 os.environ["TIMER_BOT_KEY"] = TIMER_KEY
+os.environ["MAX_BOT_KEY"] = MAX_KEY
+os.environ["MAX_BOT_TOKEN"] = "test-max-bot-token"
+os.environ["MAX_BOT_NAME"] = "dharana_test_bot"
 os.environ["JWT_SECRET"] = JWT_SECRET
 os.environ["JWT_EXPIRE_MINUTES"] = "59"
 os.environ["BOT_DATA_DIR"] = os.path.join(_TMP, "bot_data")

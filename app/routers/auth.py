@@ -4,13 +4,13 @@ from datetime import datetime, timedelta
 from email_validator import EmailNotValidError, validate_email
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models.models import User, UserEmail, PendingTelegramAuth
-from app.services.bot_auth import require_bot_key, require_timer_key
+from app.models.models import User, UserEmail, PendingTelegramAuth, PendingMaxAuth
+from app.services.bot_auth import require_bot_key, require_max_key, require_timer_key
 from app.services.auth_service import (
     hash_password,
     verify_password,
@@ -35,13 +35,18 @@ from app.services.google import decode_google_id_token
 from app.services.vk import login_with_access_token as vk_login_with_access_token
 from app.services.yandex import login_with_code as yandex_login_with_code
 from app.services.asana_service import normalize_lang
+from app.services.max_webapp import (
+    MaxWebAppError,
+    parse_user as parse_max_user,
+    validate_webapp_data,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 # Версия документов, с которой соглашается пользователь. Держим в синхроне с
 # LEGAL.version на сайте (dharana_web_app/lib/legal/config.ts) и в приложении
 # (dharana_app/lib/core/legal/legal_links.dart).
-CURRENT_CONSENT_VERSION = "1.1"
+CURRENT_CONSENT_VERSION = "1.2"
 
 
 def _consent_fields(version: str | None = None) -> dict:
@@ -124,6 +129,30 @@ class TelegramLoginRequest(BaseModel):
 
 class TelegramCodeRequest(BaseModel):
     code: str
+
+
+class MaxSessionRequest(BaseModel):
+    """Создание сессии входа через мини-приложение MAX."""
+
+    # Согласие на обработку ПДн (для входа без активной сессии).
+    consent: bool = False
+    consent_version: str | None = None
+
+
+class MaxConfirmRequest(BaseModel):
+    """Мини-приложение подтверждает сессию подписанным initData."""
+
+    session_id: str = Field(min_length=10, max_length=64)
+    init_data: str = Field(min_length=10, max_length=16384)
+
+
+class MaxBotRegisterRequest(BaseModel):
+    """Синхронизация пользователя MAX-ботом (боты не получают JWT)."""
+
+    max_id: int
+    name: str | None = None
+    username: str | None = None
+    language: str | None = None
 
 
 class GoogleLoginRequest(BaseModel):
@@ -851,6 +880,367 @@ async def set_timer_language(
     return {"language": normalize_lang(user.timer_language)}
 
 
+# --- MAX (МАКС) -------------------------------------------------------------
+# OAuth для сторонних сайтов у MAX нет: личность подтверждает мини-приложение
+# бота, присылая подписанный initData. Схема и ограничения — в
+# app/services/max_webapp.py. Код в чат не отправляем: п. 1.5 Требований MAX
+# запрещает авторизационные сообщения через API без договора с Компанией.
+
+
+def _max_session_ttl() -> timedelta:
+    return timedelta(minutes=max(1, settings.MAX_SESSION_TTL_MINUTES))
+
+
+def _max_bot_url() -> str:
+    return f"https://max.ru/{settings.MAX_BOT_NAME}"
+
+
+def _max_deep_link(session_id: str) -> str:
+    # payload: латиница/цифры/подчёркивание, до 512 символов.
+    return f"{_max_bot_url()}?startapp=login_{session_id}"
+
+
+def _max_user_name(max_user: dict, max_id: int) -> str:
+    parts = [max_user.get("first_name"), max_user.get("last_name")]
+    name = " ".join(str(p).strip() for p in parts if p)
+    if not name:
+        name = str(max_user.get("username") or "").strip()
+    return (name or f"MAX {max_id}")[:255]
+
+
+@router.post("/max/session")
+async def create_max_session(
+    body: MaxSessionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User | None = Depends(get_optional_user),
+):
+    """Создать сессию входа через MAX и вернуть deep link мини-приложения.
+
+    Вызывается и с сайта, и из приложения. Если пользователь уже авторизован
+    (есть JWT), сессия работает как привязка MAX к текущему профилю.
+    """
+    if not settings.MAX_BOT_TOKEN or not settings.MAX_BOT_NAME:
+        raise HTTPException(status_code=503, detail="MAX_NOT_CONFIGURED")
+
+    if current_user is None and not body.consent:
+        raise HTTPException(status_code=400, detail="CONSENT_REQUIRED")
+
+    now = datetime.utcnow()
+    # Чистим сессии, которые давно истекли, чтобы таблица не росла.
+    await db.execute(
+        delete(PendingMaxAuth).where(
+            PendingMaxAuth.expires_at < now - timedelta(hours=1)
+        )
+    )
+
+    session_id = secrets.token_hex(16)
+    session = PendingMaxAuth(
+        session_id=session_id,
+        user_id=current_user.id if current_user else None,
+        consent_version=(
+            (body.consent_version or CURRENT_CONSENT_VERSION)[:20]
+            if current_user is None
+            else None
+        ),
+        expires_at=now + _max_session_ttl(),
+    )
+    db.add(session)
+    await db.commit()
+
+    return {
+        "session_id": session_id,
+        "mode": "link" if current_user else "login",
+        "deep_link": _max_deep_link(session_id),
+        "bot_url": _max_bot_url(),
+        "miniapp_url": settings.MAX_MINIAPP_URL,
+        "expires_in": int(_max_session_ttl().total_seconds()),
+        "poll_interval_ms": 2000,
+        "consent_version": CURRENT_CONSENT_VERSION,
+    }
+
+
+@router.post("/max/confirm")
+async def confirm_max_session(
+    body: MaxConfirmRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Подтвердить сессию из мини-приложения подписанным initData.
+
+    Вызывается только страницей мини-приложения внутри MAX. JWT здесь не
+    выдаётся: его забирает исходный клиент (сайт/приложение) поллингом.
+    """
+    if not settings.MAX_BOT_TOKEN:
+        raise HTTPException(status_code=503, detail="MAX_NOT_CONFIGURED")
+
+    try:
+        data = validate_webapp_data(body.init_data, settings.MAX_BOT_TOKEN)
+    except MaxWebAppError:
+        raise HTTPException(status_code=400, detail="INVALID_INIT_DATA")
+
+    max_user = parse_max_user(data)
+    try:
+        max_id = int((max_user or {}).get("id"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="MAX_USER_MISSING")
+
+    # start_param подписан вместе с остальными полями: если он есть, он должен
+    # указывать на ту же сессию (защита от подмены в клиенте).
+    start_param = data.get("start_param")
+    if start_param and start_param != f"login_{body.session_id}":
+        raise HTTPException(status_code=400, detail="SESSION_MISMATCH")
+
+    now = datetime.utcnow()
+    result = await db.execute(
+        select(PendingMaxAuth).where(PendingMaxAuth.session_id == body.session_id)
+    )
+    session = result.scalar_one_or_none()
+    if session is None or session.expires_at < now:
+        raise HTTPException(status_code=400, detail="MAX_SESSION_EXPIRED")
+    if session.status != "pending":
+        raise HTTPException(status_code=400, detail="MAX_SESSION_USED")
+
+    session.max_id = max_id
+    session.max_name = _max_user_name(max_user or {}, max_id)
+    username = str((max_user or {}).get("username") or "").strip()
+    session.max_username = username[:100] or None
+    avatar = str((max_user or {}).get("photo_url") or "").strip()
+    session.max_avatar_url = avatar[:500] or None
+    session.max_language = str((max_user or {}).get("language_code") or "").strip()[:10] or None
+    session.status = "confirmed"
+    session.confirmed_at = now
+    await db.commit()
+
+    return {"ok": True, "status": "confirmed"}
+
+
+async def _finish_max_login(db: AsyncSession, session: PendingMaxAuth) -> User:
+    """Найти/создать пользователя по подтверждённой сессии MAX."""
+    assert session.max_id is not None
+    max_id = session.max_id
+    name = session.max_name or f"MAX {max_id}"
+
+    async def _free_username() -> str | None:
+        """MAX-ник свободен? Иначе не занимаем чужой (UNIQUE в app_users)."""
+        if not session.max_username:
+            return None
+        taken = (
+            await db.execute(
+                select(User.id).where(User.username == session.max_username).limit(1)
+            )
+        ).scalar_one_or_none()
+        return None if taken is not None else session.max_username
+
+    if session.user_id:
+        # Привязка MAX к уже открытому профилю.
+        user = await db.get(User, session.user_id)
+        if user is None:
+            raise HTTPException(status_code=400, detail="MAX_SESSION_USER_MISSING")
+
+        existing = (
+            await db.execute(
+                select(User).where(User.max_id == max_id, User.id != user.id)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            await merge_users(db, source=existing, target=user)
+            await db.delete(existing)
+            await db.flush()
+
+        user.max_id = max_id
+        if not user.name:
+            user.name = name
+        if not user.username:
+            user.username = await _free_username()
+        if not user.avatar_url and session.max_avatar_url:
+            user.avatar_url = session.max_avatar_url
+        await db.commit()
+        await db.refresh(user)
+        return user
+
+    user = (
+        await db.execute(select(User).where(User.max_id == max_id))
+    ).scalar_one_or_none()
+
+    if user is not None:
+        if not user.name:
+            user.name = name
+        if not user.username:
+            user.username = await _free_username()
+        if not user.avatar_url and session.max_avatar_url:
+            user.avatar_url = session.max_avatar_url
+        await db.commit()
+        await db.refresh(user)
+        return user
+
+    user = User(
+        max_id=max_id,
+        name=name,
+        username=await _free_username(),
+        avatar_url=session.max_avatar_url,
+        language=normalize_lang(session.max_language or "ru"),
+        **_consent_fields(session.consent_version),
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    await notify_new_user(user.name or f"MAX #{max_id}", "max")
+    return user
+
+
+@router.get("/max/session/{session_id}")
+async def poll_max_session(session_id: str, db: AsyncSession = Depends(get_db)):
+    """Поллинг сессии. При подтверждении один раз отдаёт JWT."""
+    result = await db.execute(
+        select(PendingMaxAuth).where(PendingMaxAuth.session_id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        return {"status": "expired"}
+
+    now = datetime.utcnow()
+    if session.expires_at < now:
+        return {"status": "expired"}
+
+    if session.status == "pending":
+        return {
+            "status": "pending",
+            "expires_in": max(0, int((session.expires_at - now).total_seconds())),
+        }
+    if session.status == "consumed":
+        return {"status": "consumed"}
+
+    # confirmed: забираем сессию атомарно, чтобы два параллельных поллинга
+    # не создали двух пользователей и не выдали два токена.
+    claimed = await db.execute(
+        update(PendingMaxAuth)
+        .where(
+            PendingMaxAuth.id == session.id,
+            PendingMaxAuth.status == "confirmed",
+        )
+        .values(status="consumed")
+    )
+    if not claimed.rowcount:
+        await db.rollback()
+        return {"status": "consumed"}
+
+    try:
+        await db.commit()
+        user = await _finish_max_login(db, session)
+    except Exception:
+        # Не сожгли сессию зря: при сбое создания профиля клиент сможет
+        # повторить поллинг.
+        await db.rollback()
+        await db.execute(
+            update(PendingMaxAuth)
+            .where(PendingMaxAuth.id == session.id)
+            .values(status="confirmed")
+        )
+        await db.commit()
+        raise
+
+    token = create_access_token(user.id)
+    return {
+        "status": "confirmed",
+        "access_token": token,
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name,
+            "max_id": user.max_id,
+        },
+    }
+
+
+@router.post("/max/bot/register")
+async def register_max_bot_user(
+    body: MaxBotRegisterRequest,
+    _: bool = Depends(require_max_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Синхронизация пользователя MAX-ботом. JWT не выдаётся."""
+    lang = normalize_lang(body.language or "ru")
+    user = (
+        await db.execute(select(User).where(User.max_id == body.max_id))
+    ).scalar_one_or_none()
+
+    if user is not None:
+        if body.name and not user.name:
+            user.name = body.name
+        if body.username and not user.username:
+            taken = (
+                await db.execute(
+                    select(User.id).where(User.username == body.username).limit(1)
+                )
+            ).scalar_one_or_none()
+            if taken is None:
+                user.username = body.username
+        await db.commit()
+        await db.refresh(user)
+    else:
+        username = None
+        if body.username:
+            taken = (
+                await db.execute(
+                    select(User.id).where(User.username == body.username).limit(1)
+                )
+            ).scalar_one_or_none()
+            username = body.username if taken is None else None
+        user = User(
+            max_id=body.max_id,
+            name=body.name,
+            username=username,
+            language=lang,
+            **_consent_fields(),
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        await notify_new_user(user.name or f"MAX #{body.max_id}", "max")
+
+    return {
+        "ok": True,
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name,
+            "max_id": user.max_id,
+            "language": normalize_lang(user.language),
+        },
+    }
+
+
+@router.get("/max/{max_id}/language")
+async def get_max_language(
+    max_id: int,
+    _: bool = Depends(require_max_key),
+    db: AsyncSession = Depends(get_db),
+):
+    user = (
+        await db.execute(select(User).where(User.max_id == max_id))
+    ).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"language": normalize_lang(user.language)}
+
+
+@router.put("/max/{max_id}/language")
+async def set_max_language(
+    max_id: int,
+    body: TimerLanguageRequest,
+    _: bool = Depends(require_max_key),
+    db: AsyncSession = Depends(get_db),
+):
+    user = (
+        await db.execute(select(User).where(User.max_id == max_id))
+    ).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.language = normalize_lang(body.language)
+    user.updated_at = datetime.utcnow()
+    await db.commit()
+    return {"language": normalize_lang(user.language)}
+
+
 @router.get("/me")
 async def get_me(user: User = Depends(require_user)):
     return {
@@ -861,6 +1251,7 @@ async def get_me(user: User = Depends(require_user)):
         "bio": user.bio,
         "avatar_url": user.avatar_url,
         "telegram_id": user.telegram_id,
+        "max_id": user.max_id,
         "email_verified": user.email_verified,
         "is_admin": user.is_admin,
         "total_practice_minutes": user.total_practice_minutes,

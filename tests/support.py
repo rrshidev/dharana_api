@@ -11,4 +11,5 @@ import secrets
 TEST_PASSWORD = os.environ.get("TEST_PASSWORD") or secrets.token_urlsafe(18)
 BOT_KEY = os.environ.get("TEST_BOT_KEY") or secrets.token_urlsafe(24)
 TIMER_KEY = os.environ.get("TEST_TIMER_KEY") or secrets.token_urlsafe(24)
+MAX_KEY = os.environ.get("TEST_MAX_KEY") or secrets.token_urlsafe(24)
 JWT_SECRET = os.environ.get("TEST_JWT_SECRET") or secrets.token_urlsafe(48)

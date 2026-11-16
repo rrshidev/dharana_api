@@ -3,6 +3,7 @@
 Ключи передаются заголовками:
   X-Bot-Key   — yoga/admin bot  (BOT_ADMIN_KEY)
   X-Timer-Key — timer bot       (TIMER_BOT_KEY)
+  X-Max-Bot-Key — MAX bot       (MAX_BOT_KEY)
 
 Сравнение через hmac.compare_digest, чтобы не течь по времени.
 """
@@ -30,3 +31,7 @@ def require_bot_key(x_bot_key: Optional[str] = Header(default=None)) -> bool:
 
 def require_timer_key(x_timer_key: Optional[str] = Header(default=None)) -> bool:
     return _check(x_timer_key, settings.TIMER_BOT_KEY, "TIMER_BOT_KEY")
+
+
+def require_max_key(x_max_bot_key: Optional[str] = Header(default=None)) -> bool:
+    return _check(x_max_bot_key, settings.MAX_BOT_KEY, "MAX_BOT_KEY")
