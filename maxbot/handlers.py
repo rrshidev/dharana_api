@@ -439,7 +439,10 @@ class MaxBotHandlers:
 
         item = items[index]
         body, truncated = truncate_text(item.get("content"), DESCRIPTION_LIMIT)
-        text = f"**{item.get('name') or ''}**\n\n{body}"
+        display_name = (
+            item.get("name_en") if lang == "en" and item.get("name_en") else item.get("name")
+        ) or ""
+        text = f"**{display_name}**\n\n{body}"
         if truncated:
             text += (
                 f"\n\n[{t(lang, 'card_more')}]"

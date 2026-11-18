@@ -198,10 +198,12 @@ def content_menu(
     builder = InlineKeyboardBuilder()
     for offset, item in enumerate(items):
         name = item.get("name") or ""
+        label = item.get("name_en") if lang == "en" else None
+        label = (label or name or "").strip()
         if name:
             builder.row(
                 _btn(
-                    name,
+                    label,
                     f"{CONTENT_PREFIX}{kind}:i:{page * PAGE_SIZE + offset}",
                 )
             )

@@ -97,10 +97,10 @@ class FakeCatalog:
         }
         self.details["Асана дня"] = make_asana("Асана дня")
         self.basics_items = [
-            {"name": f"Раздел {i}", "content": "Длинный текст. " * 200}
+            {"name": f"Раздел {i}", "name_en": f"Section {i}", "content": "Длинный текст. " * 200}
             for i in range(1, 11)
         ]
-        self.steps_items = [{"name": "ЯМА", "content": "Короткий текст."}]
+        self.steps_items = [{"name": "ЯМА", "name_en": "YAMA", "content": "Короткий текст."}]
 
     async def categories(self, lang):
         return self.categories_data
@@ -480,6 +480,30 @@ async def test_steps_item_without_truncation_has_no_link():
     assert "ЯМА" in text
     assert "Короткий текст." in text
     assert "dharana.ru" not in text
+
+
+async def test_content_uses_english_names_for_buttons_and_header():
+    handlers, _, _, _ = make_handlers()
+    user = make_user()
+    handlers._languages[user.user_id] = "en"
+
+    listing = FakeCallbackEvent("content:basics:0", user)
+    await handlers.on_callback(listing)
+    kb = listing.answers[0]["attachments"][0]
+    item_rows = [row for row in rows(kb) if row[0].payload.startswith("content:basics:i:")]
+    assert item_rows[0][0].text == "Section 1"
+    assert item_rows[1][0].text == "Section 2"
+
+    item = FakeCallbackEvent("content:basics:i:0", user)
+    await handlers.on_callback(item)
+    text = item.answers[0]["new_text"]
+    assert "**Section 1**" in text
+    assert "Раздел 1" not in text
+    assert "https://dharana.ru/en/basics/" in text
+
+    steps = FakeCallbackEvent("content:steps:i:0", user)
+    await handlers.on_callback(steps)
+    assert "**YAMA**" in steps.answers[0]["new_text"]
 
 
 async def test_daily_and_random_commands_render_cards():
