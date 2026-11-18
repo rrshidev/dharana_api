@@ -9,9 +9,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from maxapi import Bot, Dispatcher
 from maxapi.enums.update import UpdateType
+from maxapi.types import BotCommand
 from maxapi.webhook.fastapi import FastAPIMaxWebhook
 
 from .api import DharanaApi
+from .catalog import CatalogClient
 from .config import settings
 from .handlers import MaxBotHandlers
 
@@ -23,6 +25,20 @@ UPDATE_TYPES = [
     UpdateType.MESSAGE_CALLBACK,
 ]
 
+# Меню команд в карточке бота MAX. Описания — по-русски: это основной язык
+# аудитории, а список команд у бота один на все языки.
+BOT_COMMANDS = (
+    BotCommand(name="start", description="Меню и приветствие"),
+    BotCommand(name="catalog", description="Каталог асан"),
+    BotCommand(name="daily", description="Асана дня"),
+    BotCommand(name="random", description="Случайная асана"),
+    BotCommand(name="basics", description="Основы йоги"),
+    BotCommand(name="steps", description="Ступени йоги"),
+    BotCommand(name="help", description="Помощь"),
+    BotCommand(name="about_us", description="О проекте и авторах"),
+    BotCommand(name="language", description="Сменить язык"),
+)
+
 
 def create_app() -> FastAPI:
     bot = Bot(token=settings.bot_token)
@@ -32,7 +48,11 @@ def create_app() -> FastAPI:
         api_prefix=settings.api_prefix,
         bot_key=settings.bot_key,
     )
-    MaxBotHandlers(bot, api).register(dp)
+    catalog = CatalogClient(
+        base_url=settings.api_url,
+        api_prefix=settings.api_prefix,
+    )
+    MaxBotHandlers(bot, api, catalog).register(dp)
 
     webhook = FastAPIMaxWebhook(
         dp,
@@ -61,13 +81,23 @@ def create_app() -> FastAPI:
             # может быть временно недоступна. Ошибка видна в логах.
             logger.exception("Не удалось подписаться на MAX webhook")
 
+    async def _publish_commands() -> None:
+        """Публикует список команд — он появляется в карточке бота в MAX."""
+        try:
+            await bot.set_commands(*BOT_COMMANDS)
+            logger.info("Меню команд MAX опубликовано (%s)", len(BOT_COMMANDS))
+        except Exception:
+            logger.exception("Не удалось опубликовать меню команд MAX")
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         async with webhook.lifespan(app):
             await _subscribe()
+            await _publish_commands()
             try:
                 yield
             finally:
+                await catalog.close()
                 await api.close()
 
     app = FastAPI(title="Dharana MAX bot", lifespan=lifespan)
