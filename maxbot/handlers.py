@@ -205,6 +205,14 @@ class MaxBotHandlers:
             )
             return
 
+        if payload == kb.MENU_SOCIALS:
+            await event.answer(
+                new_text=t(lang, "socials_title"),
+                attachments=[kb.socials_menu(lang)],
+                format=ParseMode.MARKDOWN,
+            )
+            return
+
         if payload == kb.MENU_CATALOG:
             await self._show_categories(send, lang)
             return

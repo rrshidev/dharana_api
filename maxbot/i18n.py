@@ -14,6 +14,11 @@ LANGUAGES = ("ru", "en")
 
 SITE_URL = "https://dharana.ru"
 APK_URL = f"{SITE_URL}/download/dharana.apk"
+TELEGRAM_CHANNEL_URL = "https://t.me/dharana_yoga"
+MAX_BOT_URL = "https://max.ru/se15040381_bot"
+INSTAGRAM_URL = "https://www.instagram.com/timerasana_bot"
+YOUTUBE_URL = "https://youtube.com/channel/UC1q01jpORkhy5hdTo6BaXug?si=J-ySo-FH-V7c0UK2"
+TIKTOK_URL = "https://www.tiktok.com/@dharana.project"
 STARS_TOTAL = 5
 
 
@@ -174,6 +179,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "menu_site": "🌐 Сайт Dharana",
         "menu_app": "📲 Скачать приложение",
         "menu_about": "ℹ️ О проекте",
+        "menu_socials": "📣 Наши соцсети",
+        "socials_title": (
+            "📣 **Наши социальные сети**\n\n"
+            "Подписывайтесь, чтобы быть в курсе практик, новостей и обновлений проекта:"
+        ),
         "back": "⬅️ Назад",
         "back_menu": "🏠 В меню",
         "back_categories": "⬅️ К категориям",
@@ -300,6 +310,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "menu_site": "🌐 Dharana website",
         "menu_app": "📲 Download the app",
         "menu_about": "ℹ️ About",
+        "menu_socials": "📣 Our socials",
+        "socials_title": (
+            "📣 **Our social networks**\n\n"
+            "Subscribe to stay up to date with practices, news and project updates:"
+        ),
         "back": "⬅️ Back",
         "back_menu": "🏠 Menu",
         "back_categories": "⬅️ Categories",

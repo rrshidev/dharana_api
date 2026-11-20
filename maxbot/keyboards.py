@@ -14,7 +14,18 @@ from maxapi.types.attachments.buttons.callback_button import CallbackButton
 from maxapi.types.attachments.buttons.link_button import LinkButton
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 
-from .i18n import APK_URL, effect_label, effects_text, site_url, t
+from .i18n import (
+    APK_URL,
+    INSTAGRAM_URL,
+    MAX_BOT_URL,
+    TELEGRAM_CHANNEL_URL,
+    TIKTOK_URL,
+    YOUTUBE_URL,
+    effect_label,
+    effects_text,
+    site_url,
+    t,
+)
 
 MENU_MAIN = "menu:main"
 MENU_ABOUT = "menu:about"
@@ -24,6 +35,7 @@ MENU_RANDOM = "menu:random"
 MENU_CATALOG = "menu:catalog"
 MENU_BASICS = "menu:basics"
 MENU_STEPS = "menu:steps"
+MENU_SOCIALS = "menu:socials"
 NOOP = "noop"
 
 CATALOG_PREFIX = "cat:"
@@ -77,6 +89,7 @@ def main_menu(lang: str):
         _btn(t(lang, "menu_basics"), MENU_BASICS),
         _btn(t(lang, "menu_steps"), MENU_STEPS),
     )
+    builder.row(_btn(t(lang, "menu_socials"), MENU_SOCIALS))
     builder.row(
         _link(t(lang, "menu_site"), site_url(lang)),
         _link(t(lang, "menu_app"), APK_URL),
@@ -85,6 +98,17 @@ def main_menu(lang: str):
         _btn(t(lang, "menu_about"), MENU_ABOUT),
         _btn(t(lang, "btn_language"), MENU_LANG),
     )
+    return builder.as_markup()
+
+
+def socials_menu(lang: str):
+    builder = InlineKeyboardBuilder()
+    builder.row(_link("Telegram", TELEGRAM_CHANNEL_URL))
+    builder.row(_link("MAX", MAX_BOT_URL))
+    builder.row(_link("Instagram", INSTAGRAM_URL))
+    builder.row(_link("YouTube", YOUTUBE_URL))
+    builder.row(_link("TikTok", TIKTOK_URL))
+    builder.row(_btn(t(lang, "back_menu"), MENU_MAIN))
     return builder.as_markup()
 
 
